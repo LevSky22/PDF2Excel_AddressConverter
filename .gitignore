@@ -1,3 +1,4 @@
 .env
 google_maps_cache.sqlite
+input_pdfs/
 output_excel/
