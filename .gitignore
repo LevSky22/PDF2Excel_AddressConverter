@@ -1,0 +1,4 @@
+# Environment Variables
+.env
+google_maps_cache.sqlite
+output_excel/
