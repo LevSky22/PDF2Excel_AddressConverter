@@ -174,57 +174,54 @@ for i, df in enumerate(pdf_dataframes):
             def geocode_address(row, retries=3):
                 address = row.cleaned_address
                 city = row.mun_bor
-                full_address = f"{address}, {city}, QC, Canada"  # Append province and country to help accuracy
-                # Encode the full address for use in the URL
+                full_address = f"{address}, {city}, QC, Canada"
                 encoded_address = urllib.parse.quote(full_address)
-                # Check if the address is already cached
                 if full_address in cache:
                     return cache[full_address]
                 try:
-                    # Retry mechanism for geocoding
                     for attempt in range(retries):
-                        time.sleep(0.5)  # Keep delay minimal to prevent being rate-limited
+                        time.sleep(0.5)
                         response = requests.get(f"https://maps.googleapis.com/maps/api/geocode/json?address={encoded_address}&components=locality:{city}|country:CA&key={API_KEY}")
                         data = response.json()
                         if data['status'] == 'OK':
-                            # Extract postal code, province, and validate country from the response
                             result = data['results'][0]
                             address_components = result['address_components']
                             postal_code = next((c['long_name'] for c in address_components if 'postal_code' in c['types']), None)
                             province = next((c['long_name'] for c in address_components if 'administrative_area_level_1' in c['types']), None)
                             country = next((c['short_name'] for c in address_components if 'country' in c['types']), None)
                             
-                            # Ensure the result is within Canada
+                            # Retrieve full city name from geocoding result
+                            full_city = next((c['long_name'] for c in address_components if 'locality' in c['types']), city)
+                            
                             if country == 'CA':
-                                # Cache the result for future use
-                                cache[full_address] = (postal_code, province)
-                                return postal_code, province
+                                cache[full_address] = (postal_code, province, full_city)
+                                return postal_code, province, full_city
 
-                        # Retry if there is an error or an empty response
                         elif data['status'] in ['OVER_QUERY_LIMIT', 'UNKNOWN_ERROR']:
-                            time.sleep(1)  # Wait a bit before retrying
+                            time.sleep(1)
                         else:
                             print(f"Failed to geocode address: {full_address}, Status: {data['status']}, Error: {data.get('error_message', 'N/A')}")
-                            break  # If it's not a retryable error, break the loop
+                            break
                 except Exception as e:
-                    # Print an error message if the geocoding request fails
                     print(f"Geocoding error: {e}")
-                return None, None
+                return None, None, None
 
             # Use ThreadPoolExecutor to speed up geocoding requests
             with ThreadPoolExecutor(max_workers=10) as executor:
                 geocode_results = list(executor.map(geocode_address, [row for row in df.itertuples(index=False)]))
 
             # Apply geocoding results to the DataFrame
-            df[['postal_code', 'province']] = pd.DataFrame(geocode_results, index=df.index)
+            df[['postal_code', 'province', 'full_city']] = pd.DataFrame(geocode_results, index=df.index)
+
+            # Use the full city name from geocoding if available, otherwise use the original city name
+            df['city'] = df.apply(lambda row: row['full_city'] if pd.notna(row['full_city']) else row['mun_bor'], axis=1)
 
             # Adding headers for the output: FNAM, LNAM, ADD1, CITY, PROV, PC
-            df['fnam'] = 'À'  # Set first name as 'À' for all records
-            df['lnam'] = "l'occupant"  # Set last name as 'l'occupant' for all records
-            df['add1'] = df['address']  # Full address field
-            df['city'] = df['mun_bor']  # City field
-            df['prov'] = df['province']  # Province field from geocoding
-            df['pc'] = df['postal_code']  # Postal code from geocoding
+            df['fnam'] = 'À'
+            df['lnam'] = "l'occupant"
+            df['add1'] = df['address']
+            df['prov'] = df['province']
+            df['pc'] = df['postal_code']
 
             # Rearrange columns to match the required output format
             output_df = df[['fnam', 'lnam', 'add1', 'city', 'prov', 'pc']]
