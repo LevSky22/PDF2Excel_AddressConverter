@@ -6,6 +6,7 @@ borough_to_city = {
     "Beaconsfield": "Montreal",
     "Cote-des-Neiges-Notre-Dame-de-Grace": "Montreal",
     "Côte-des-Neiges–Notre-Dame-de-Grâce": "Montreal",
+    "Côte S Luc": "Côte Saint-Luc",
     "CDN/NDG": "Montreal",
     "Lachine": "Montreal",
     "LaSalle": "Montreal",
