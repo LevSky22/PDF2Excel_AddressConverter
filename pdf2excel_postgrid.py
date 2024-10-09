@@ -344,6 +344,8 @@ def postgrid_autocomplete_address(address):
 def clean_address(address):
     if not address:
         return ""
+    # Remove content within parentheses, including the parentheses
+    address = re.sub(r'\s*\([^)]*\)', '', address)
     # Remove trailing comma and any following whitespace
     address = re.sub(r',\s*$', '', address.strip())
     # Remove any other trailing punctuation
@@ -400,8 +402,8 @@ if __name__ == "__main__":
 
             df = df.reset_index(drop=True)
 
-            # Take only the 50 rows for testing
-            df = df.head(50)
+            # Take only the 0 rows for testing
+            df = df.head(300)
 
             mun_bor_column = next((col for col in df.columns if 'mun' in col or 'bor' in col), None)
             address_column = next((col for col in df.columns if 'address' in col), None)
