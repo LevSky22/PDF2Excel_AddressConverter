@@ -18,7 +18,6 @@ borough_to_city = {
     "Le Sud-Ouest": "Montreal",
     "Mercier–Hochelaga-Maisonneuve": "Montreal",
     "Montréal-Nord": "Montreal",
-    "Outremont": "Montreal",
     "Pierrefonds-Roxboro": "Montreal",
     "Plateau-Mont-Royal": "Montreal",
     "Rivière-des-Prairies–Pointe-aux-Trembles": "Montreal",
@@ -70,7 +69,9 @@ abbreviated_cities = {
     "S JÉRÔME": "SAINT-JEROME",
     "S JULIE": "SAINTE-JULIE",
     "S LAZARE": "SAINT-LAZARE",
-    "S MARGUERITE MASSON": "Sainte-Marguerite-du-Lac-Masson"
+    "S MARGUERITE MASSON": "Sainte-Marguerite-du-Lac-Masson",
+    "S THÉRÈSE": "SAINTE-THERESE",
+    "S ADÈLE": "SAINTE-ADELE"
 }
 
 def expand_abbreviated_city(city):
