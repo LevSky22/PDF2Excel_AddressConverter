@@ -2,8 +2,6 @@ borough_to_city = {
     "Ahuntsic": "Montreal",
     "Ahuntsic-Cartierville": "Montreal",
     "Anjou": "Montreal",
-    "Baie d'Urfe": "Montreal",
-    "Beaconsfield": "Montreal",
     "Cote-des-Neiges-Notre-Dame-de-Grace": "Montreal",
     "Côte-des-Neiges–Notre-Dame-de-Grâce": "Montreal",
     "Côte S Luc": "Côte Saint-Luc",
