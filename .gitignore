@@ -2,5 +2,6 @@
 google_maps_cache.sqlite
 postgrid_cache.sqlite
 output_excel/
+input_pdfs/
 __pycache__/
 logs/
