@@ -392,9 +392,6 @@ if __name__ == "__main__":
 
             df = df.reset_index(drop=True)
 
-            # Take only the 10 rows for testing
-            df = df.head(10)
-
             mun_bor_column = next((col for col in df.columns if 'mun' in col or 'bor' in col), None)
             address_column = next((col for col in df.columns if 'address' in col), None)
 
