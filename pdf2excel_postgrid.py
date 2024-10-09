@@ -132,71 +132,67 @@ def postgrid_api_call(url, method='post', **kwargs):
     response.raise_for_status()
     return response.json()
 
+def extract_address_components(address):
+    parts = re.split(r'\s+', address.lower())
+    street_number = None
+    street_name = []
+
+    for part in parts:
+        if not street_number and re.match(r'^\d+[a-z]?$', part):
+            street_number = part
+        else:
+            street_name.append(part)
+
+    return street_number, ' '.join(street_name)
+
 def find_best_suggestion(input_address, input_city, suggestions):
-    input_apt, input_number, input_street = extract_address_components(input_address)
+    input_number, input_street = extract_address_components(input_address)
     
     best_match = None
     highest_score = -1
+    apartment_building_match = None
 
     for suggestion in suggestions:
-        suggestion_address = suggestion.get('line1', '').lower()
-        sugg_apt, sugg_number, sugg_street = extract_address_components(suggestion_address)
+        suggestion_address = suggestion.get('line1', '')
+        if not suggestion_address:
+            continue
+        
+        sugg_number, sugg_street = extract_address_components(suggestion_address.lower())
         suggestion_city = suggestion.get('city', '').lower()
 
         score = 0
 
-        # Check if the suggestion's street number matches the input or is within a range
+        # Check if the suggestion's street number matches the input
         if sugg_number == input_number:
             score += 1000
-        elif '...' in sugg_number:
+        elif sugg_number and '...' in sugg_number:
             range_start, range_end = map(int, re.findall(r'\d+', sugg_number))
-            if range_start <= int(input_number) <= range_end:
+            input_num = re.findall(r'\d+', input_number)[0] if input_number else None
+            if input_num and range_start <= int(input_num) <= range_end:
                 score += 800
+                apartment_building_match = suggestion
         else:
-            continue  # Skip if street number doesn't match and isn't in range
+            # Check for close number match
+            input_num = re.findall(r'\d+', input_number)[0] if input_number else None
+            sugg_num = re.findall(r'\d+', sugg_number)[0] if sugg_number else None
+            if input_num and sugg_num:
+                if abs(int(sugg_num) - int(input_num)) <= 20:
+                    score += 500
 
         # Street name similarity
-        street_similarity = difflib.SequenceMatcher(None, input_street, sugg_street).ratio()
-        score += street_similarity * 100
+        if input_street and sugg_street:
+            street_similarity = difflib.SequenceMatcher(None, input_street, sugg_street).ratio()
+            score += street_similarity * 100
 
         # City match
-        if input_city.lower() == suggestion_city:
-            score += 100
-        elif input_city.lower() in suggestion_city or suggestion_city in input_city.lower():
+        if input_city.lower() in suggestion_city or suggestion_city in input_city.lower():
             score += 50
-
-        # Apartment number handling
-        if input_apt:
-            if sugg_apt and input_apt == sugg_apt:
-                score += 200
-            elif '...' in suggestion_address:
-                score += 100  # It's potentially correct, but we're not sure
 
         if score > highest_score:
             highest_score = score
             best_match = suggestion
 
-    return best_match
-
-def extract_address_components(address):
-    parts = re.split(r'[-\s]+', address.lower())
-    apt_number = None
-    street_number = None
-    street_name = []
-
-    for i, part in enumerate(parts):
-        if part.isdigit():
-            if not street_number:
-                street_number = part
-            elif not apt_number:
-                apt_number = street_number
-                street_number = part
-        elif re.match(r'\d+[a-z]?', part) and not apt_number:
-            apt_number = part
-        else:
-            street_name.append(part)
-
-    return apt_number, street_number, ' '.join(street_name)
+    return best_match or apartment_building_match
 
 def postgrid_suggest_address(address, city):
     url = "https://api.postgrid.com/v1/addver/suggestions"
@@ -224,14 +220,26 @@ def postgrid_suggest_address(address, city):
         if data.get("status") == "success":
             suggestions = data.get("data", [])
             if suggestions:
-                best_match = find_best_suggestion(address, mapped_city, suggestions)
-                if best_match:
-                    logger.info(f"Best matching suggestion found for '{address}' in '{mapped_city}': {best_match}")
-                    return best_match
-                else:
-                    logger.warning(f"No suitable suggestion found for: {full_address}")
-                    logger.debug(f"Input address components: {extract_address_components(address)}")
-                    logger.debug(f"All suggestions: {json.dumps(suggestions, indent=2)}")
+                try:
+                    best_match = find_best_suggestion(address, mapped_city, suggestions)
+                    if best_match:
+                        logger.info(f"Best matching suggestion found for '{address}' in '{mapped_city}': {best_match}")
+                        return best_match
+                except Exception as e:
+                    logger.error(f"Error in find_best_suggestion: {str(e)}")
+                    logger.debug(f"Input address: {address}")
+                    logger.debug(f"Suggestions: {json.dumps(suggestions, indent=2)}")
+                
+                # If no best match is found or an error occurred, create a custom suggestion based on input
+                logger.warning(f"No suitable suggestion found for: {full_address}")
+                custom_suggestion = {
+                    "line1": address,
+                    "city": mapped_city,
+                    "provinceOrState": "QC",
+                    "country": "CA",
+                    "postalOrZip": suggestions[0].get("postalOrZip") if suggestions else ""
+                }
+                return custom_suggestion
             else:
                 logger.warning(f"No suggestions found for: {full_address}")
         else:
@@ -391,6 +399,9 @@ if __name__ == "__main__":
                 df.columns = expected_headers[:len(df.columns)]
 
             df = df.reset_index(drop=True)
+
+            # Take only the 50 rows for testing
+            df = df.head(50)
 
             mun_bor_column = next((col for col in df.columns if 'mun' in col or 'bor' in col), None)
             address_column = next((col for col in df.columns if 'address' in col), None)
