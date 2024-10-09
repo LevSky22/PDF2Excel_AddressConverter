@@ -26,6 +26,7 @@ borough_to_city = {
     "Rosemont–La Petite-Patrie": "Montreal",
     "Rosemont": "Montreal",
     "Saint-Laurent": "Montreal",
+    "MERCIER/HOCHELAGA": "Montreal",
     "S Laurent": "Montreal",
     "S Léonard": "Montreal",
     "Saint-Léonard": "Montreal",
@@ -68,7 +69,8 @@ abbreviated_cities = {
     "S HUBERT": "SAINT-HUBERT",
     "S JÉRÔME": "SAINT-JEROME",
     "S JULIE": "SAINTE-JULIE",
-    "S LAZARE": "SAINT-LAZARE"
+    "S LAZARE": "SAINT-LAZARE",
+    "S MARGUERITE MASSON": "Sainte-Marguerite-du-Lac-Masson"
 }
 
 def expand_abbreviated_city(city):

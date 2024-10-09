@@ -20,6 +20,7 @@ from retry import retry
 import difflib
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill
+import Levenshtein
 
 # Create a logs directory if it doesn't exist
 if not os.path.exists('logs'):
@@ -220,18 +221,25 @@ def postgrid_suggest_address(address, city):
         if data.get("status") == "success":
             suggestions = data.get("data", [])
             if suggestions:
-                try:
-                    best_match = find_best_suggestion(address, mapped_city, suggestions)
-                    if best_match:
-                        logger.info(f"Best matching suggestion found for '{address}' in '{mapped_city}': {best_match}")
-                        return best_match
-                except Exception as e:
-                    logger.error(f"Error in find_best_suggestion: {str(e)}")
+                best_match = None
+                highest_similarity = 0
+                for suggestion in suggestions:
+                    suggested_city = suggestion.get("city", "").lower()
+                    similarity = Levenshtein.ratio(mapped_city.lower(), suggested_city)
+                    if similarity > highest_similarity and similarity >= 0.8:  # 80% match threshold
+                        highest_similarity = similarity
+                        best_match = suggestion
+                
+                if best_match:
+                    logger.info(f"Best matching suggestion found for '{address}' in '{mapped_city}': {best_match}")
+                    logger.info(f"City similarity: {highest_similarity:.2f}")
+                    return best_match
+                else:
+                    logger.warning(f"No suitable suggestion found for: {full_address}")
                     logger.debug(f"Input address: {address}")
                     logger.debug(f"Suggestions: {json.dumps(suggestions, indent=2)}")
                 
-                # If no best match is found or an error occurred, create a custom suggestion based on input
-                logger.warning(f"No suitable suggestion found for: {full_address}")
+                # If no best match is found, create a custom suggestion based on input
                 custom_suggestion = {
                     "line1": address,
                     "city": mapped_city,
@@ -488,7 +496,9 @@ if __name__ == "__main__":
                         output_df = output_df[~(output_df['add1'].isna() & output_df['city'].isna() & output_df['prov'].isna() & output_df['pc'].isna())]
 
                         # Export the final DataFrame to an Excel file with highlighting
-                        output_filename = f'output_excel/{os.path.splitext(os.path.basename(pdf_path))[0]}_listings_postgrid.xlsx'
+                        # Generate the output filename with date and time
+                        current_time = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+                        output_filename = f'output_excel/{os.path.splitext(os.path.basename(pdf_path))[0]}_listings_postgrid_{current_time}.xlsx'
                         
                         # Create a new workbook and select the active sheet
                         wb = Workbook()
