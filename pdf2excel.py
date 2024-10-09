@@ -9,6 +9,7 @@ from tkinter import Tk, filedialog
 import os
 import requests_cache  # To use persistent caching
 from dotenv import load_dotenv
+from city_mappings import get_city_from_borough
 
 # Enable in-memory caching for requests
 requests_cache.install_cache('google_maps_cache', backend='memory', expire_after=86400)  # Cache expires after 1 day
@@ -51,62 +52,8 @@ def extract_with_pdfplumber(pdf_path):
 # Function to standardize city names
 def standardize_city_name(city):
     if pd.isna(city):
-        return city  # If the city is NaN, return it as is
-    city_mappings = {
-        "Ahuntsic": "Montreal",
-        "Ahuntsic-Cartierville": "Montreal",
-        "Anjou": "Montreal",
-        "Baie d'Urfe": "Montreal",
-        "Beaconsfield": "Montreal",
-        "Cote-des-Neiges-Notre-Dame-de-Grace": "Montreal",
-        "Côte-des-Neiges–Notre-Dame-de-Grâce": "Montreal",
-        "CDN/NDG": "Montreal",
-        "Lachine": "Montreal",
-        "LaSalle": "Montreal",
-        "L'Île-Bizard–Sainte-Geneviève": "Montreal",
-        "L'Île Biz/Geneviève": "Montreal",
-        "Le Sud Ouest": "Montreal",
-        "Le Sud-Ouest": "Montreal",
-        "Mercier–Hochelaga-Maisonneuve": "Montreal",
-        "Montréal-Nord": "Montreal",
-        "Outremont": "Montreal",
-        "Pierrefonds-Roxboro": "Montreal",
-        "Plateau-Mont-Royal": "Montreal",
-        "Rivière-des-Prairies–Pointe-aux-Trembles": "Montreal",
-        "RDP/PAT": "Montreal",
-        "Rosemont–La Petite-Patrie": "Montreal",
-        "Rosemont": "Montreal",
-        "Saint-Laurent": "Montreal",
-        "S Laurent": "Montreal",
-        "S Léonard": "Montreal",
-        "Saint-Léonard": "Montreal",
-        "Sud-Ouest": "Montreal",
-        "Verdun": "Montreal",
-        "Verdun/Île Soeurs": "Montreal",
-        "Ville Marie": "Montreal",
-        "Villeray–Saint-Michel–Parc-Extension": "Montreal",
-        "Villeray/S Michel": "Montreal",
-        "Auteuil": "Laval",
-        "Chomedey": "Laval",
-        "Duvernay": "Laval",
-        "Fabreville": "Laval",
-        "Îles Laval": "Laval",
-        "Laval des Rapides": "Laval",
-        "Laval Ouest": "Laval",
-        "Laval sur le Lac": "Laval",
-        "Pont Viau": "Laval",
-        "S François": "Laval",
-        "S Martin": "Laval",
-        "S Vincent de Paul": "Laval",
-        "S Dorothée": "Laval",
-        "S Rose": "Laval",
-        "Rosemère": "Laval",
-        "Vimont": "Laval"
-    }
-    for key, value in city_mappings.items():
-        if city.startswith(key):
-            return city.replace(key, value)
-    return city
+        return city
+    return get_city_from_borough(city)
 
 # Function to parallelize PDF extraction
 def parallel_pdf_extraction(paths):
