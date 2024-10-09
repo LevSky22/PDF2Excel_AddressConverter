@@ -11,6 +11,8 @@ borough_to_city = {
     "LaSalle": "Montreal",
     "L'Île-Bizard–Sainte-Geneviève": "Montreal",
     "L'Île Biz/Geneviève": "Montreal",
+    "Le Plateau-Mont-Royal": "Montreal",
+    "Le Plateau M Royal": "Montreal",
     "Le Sud Ouest": "Montreal",
     "Le Sud-Ouest": "Montreal",
     "Mercier–Hochelaga-Maisonneuve": "Montreal",

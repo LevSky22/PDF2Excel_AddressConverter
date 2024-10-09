@@ -1,4 +1,6 @@
 .env
 google_maps_cache.sqlite
+postgrid_cache.sqlite
 output_excel/
 __pycache__/
+logs/
