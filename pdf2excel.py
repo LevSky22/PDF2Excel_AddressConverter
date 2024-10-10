@@ -20,9 +20,9 @@ def extract_with_pdfplumber(pdf_path):
                 all_data.extend(table[1:])  # Skip the header row
         return pd.DataFrame(all_data, columns=['centris_no', 'municipality_borough', 'address', 'postal_code'])
 
-def clean_city(city):
+def clean_text(text):
     # Remove everything from the first opening parenthesis onwards
-    cleaned = re.sub(r'\s*\(.*$', '', city)
+    cleaned = re.sub(r'\s*\(.*$', '', text)
     # Remove any trailing whitespace or punctuation
     cleaned = re.sub(r'[\s\-,]+$', '', cleaned)
     return cleaned.strip()
@@ -33,8 +33,8 @@ def process_pdf(pdf_path):
     output_df = pd.DataFrame({
         'FNAM': 'À',
         'LNAM': "l'occupant",
-        'ADD1': df['address'],
-        'CITY': df['municipality_borough'].apply(clean_city),
+        'ADD1': df['address'].apply(clean_text),
+        'CITY': df['municipality_borough'].apply(clean_text),
         'PROV': 'QC',
         'PC': df['postal_code']
     })
