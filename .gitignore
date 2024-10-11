@@ -5,3 +5,5 @@ output_excel/
 input_pdfs/
 __pycache__/
 logs/
+build/
+dist/
