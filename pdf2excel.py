@@ -29,23 +29,51 @@ def clean_text(text):
     cleaned = re.sub(r'[\s\-,]+$', '', cleaned)
     return cleaned.strip()
 
+def clean_and_separate_city_address(city, address):
+    # Combine city and address
+    combined = f"{city} {address}".strip()
+    
+    # Regular expression to find the first number in the string
+    number_match = re.search(r'\d+', combined)
+    
+    if number_match:
+        # Split at the first number
+        split_index = number_match.start()
+        city = combined[:split_index].strip()
+        address = combined[split_index:].strip()
+    else:
+        # If no number found, keep original values
+        city = city.strip()
+        address = address.strip()
+    
+    # If either city or address is empty, use the original combined string
+    if not city or not address:
+        city = combined
+        address = combined
+    
+    return clean_text(city), clean_text(address)
+
 def process_pdfs(pdf_paths, merge=False):
     all_dfs = []
     for pdf_path in pdf_paths:
         df = extract_with_pdfplumber(pdf_path)
+        
+        # Apply the new function to clean and separate city and address
+        cleaned_data = df.apply(lambda row: clean_and_separate_city_address(row['municipality_borough'], row['address']), axis=1)
+        
         output_df = pd.DataFrame({
             'FNAM': 'À',
             'LNAM': "l'occupant",
-            'ADD1': df['address'].apply(clean_text),
-            'CITY': df['municipality_borough'].apply(clean_text),
+            'ADD1': cleaned_data.apply(lambda x: x[1]),  # Always use the address part
+            'CITY': cleaned_data.apply(lambda x: x[0]),
             'PROV': 'QC',
             'PC': df['postal_code']
         })
-        all_dfs.append(output_df.sort_values('CITY'))  # Sort each DataFrame by CITY
+        all_dfs.append(output_df.sort_values('CITY'))
     
     if merge:
         merged_df = pd.concat(all_dfs, ignore_index=True)
-        return merged_df.sort_values('CITY')  # Sort the merged DataFrame by CITY
+        return merged_df.sort_values('CITY')
     else:
         return all_dfs
 
