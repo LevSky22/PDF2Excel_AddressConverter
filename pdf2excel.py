@@ -29,51 +29,23 @@ def clean_text(text):
     cleaned = re.sub(r'[\s\-,]+$', '', cleaned)
     return cleaned.strip()
 
-def clean_and_separate_city_address(city, address):
-    # Combine city and address
-    combined = f"{city} {address}".strip()
-    
-    # Regular expression to find the first number in the string
-    number_match = re.search(r'\d+', combined)
-    
-    if number_match:
-        # Split at the first number
-        split_index = number_match.start()
-        city = combined[:split_index].strip()
-        address = combined[split_index:].strip()
-    else:
-        # If no number found, keep original values
-        city = city.strip()
-        address = address.strip()
-    
-    # If either city or address is empty, use the original combined string
-    if not city or not address:
-        city = combined
-        address = combined
-    
-    return clean_text(city), clean_text(address)
-
 def process_pdfs(pdf_paths, merge=False):
     all_dfs = []
     for pdf_path in pdf_paths:
         df = extract_with_pdfplumber(pdf_path)
-        
-        # Apply the new function to clean and separate city and address
-        cleaned_data = df.apply(lambda row: clean_and_separate_city_address(row['municipality_borough'], row['address']), axis=1)
-        
         output_df = pd.DataFrame({
             'FNAM': 'À',
             'LNAM': "l'occupant",
-            'ADD1': cleaned_data.apply(lambda x: x[1]),  # Always use the address part
-            'CITY': cleaned_data.apply(lambda x: x[0]),
+            'ADD1': df['address'].apply(clean_text),
+            'CITY': df['municipality_borough'].apply(clean_text),
             'PROV': 'QC',
             'PC': df['postal_code']
         })
-        all_dfs.append(output_df.sort_values('CITY'))
+        all_dfs.append(output_df)
     
     if merge:
         merged_df = pd.concat(all_dfs, ignore_index=True)
-        return merged_df.sort_values('CITY')
+        return merged_df.sort_values('CITY')  # Sort by CITY column
     else:
         return all_dfs
 
@@ -82,17 +54,22 @@ def save_to_excel(dfs, pdf_paths, merge=False):
     
     if merge:
         output_filename = f'output_excel/merged_output_{current_time}.xlsx'
+        dfs.sort_values('CITY', inplace=True)  # Sort by CITY column
         dfs.to_excel(output_filename, index=False)
         auto_adjust_columns(output_filename)
         print(f"Merged Excel file '{output_filename}' has been created successfully.")
     else:
         for df, pdf_path in zip(dfs, pdf_paths):
             output_filename = f'output_excel/{os.path.splitext(os.path.basename(pdf_path))[0]}_{current_time}.xlsx'
-            df.sort_values('CITY').to_excel(output_filename, index=False)  # Sort before saving
+            df.sort_values('CITY', inplace=True)  # Sort by CITY column
+            df.to_excel(output_filename, index=False)
             auto_adjust_columns(output_filename)
             print(f"Excel file '{output_filename}' has been created successfully.")
 
 def auto_adjust_columns(filename):
+    from openpyxl import load_workbook
+    from openpyxl.utils import get_column_letter
+
     workbook = load_workbook(filename)
     worksheet = workbook.active
 
@@ -105,13 +82,8 @@ def auto_adjust_columns(filename):
                     max_length = len(cell.value)
             except:
                 pass
-        adjusted_width = (max_length + 2)
+        adjusted_width = (max_length + 2) * 1.2  # Multiply by 1.2 for better fit
         worksheet.column_dimensions[column_letter].width = adjusted_width
-
-    # Use Excel's built-in autofit
-    for column in worksheet.columns:
-        column_letter = get_column_letter(column[0].column)
-        worksheet.column_dimensions[column_letter].auto_size = True
 
     workbook.save(filename)
 
