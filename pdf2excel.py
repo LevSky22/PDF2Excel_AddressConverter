@@ -22,56 +22,53 @@ def extract_with_pdfplumber(pdf_path):
                 all_data.extend(table[1:])  # Skip the header row
         return pd.DataFrame(all_data, columns=['centris_no', 'municipality_borough', 'address', 'postal_code'])
 
-def clean_text_and_extract_address(text):
-    # Split at the first occurrence of a pattern that looks like the start of an address
-    match = re.search(r'\b(?:\d+[a-z]?|[a-z]\d+)\b', text, re.IGNORECASE)
+def clean_text(text):
+    # Remove everything from the first opening parenthesis onwards
+    cleaned = re.sub(r'\s*\(.*$', '', text)
+    # Remove any trailing whitespace or punctuation
+    cleaned = re.sub(r'[\s\-,]+$', '', cleaned)
+    return cleaned.strip()
+
+def process_pdfs(pdf_paths, merge=False):
+    all_dfs = []
+    for pdf_path in pdf_paths:
+        df = extract_with_pdfplumber(pdf_path)
+        output_df = pd.DataFrame({
+            'FNAM': 'À',
+            'LNAM': "l'occupant",
+            'ADD1': df['address'].apply(clean_text),
+            'CITY': df['municipality_borough'].apply(clean_text),
+            'PROV': 'QC',
+            'PC': df['postal_code']
+        })
+        all_dfs.append(output_df.sort_values('CITY'))  # Sort each DataFrame by CITY
     
-    if match:
-        split_index = match.start()
-        municipality = text[:split_index].strip()
-        address = text[split_index:].strip()
-        
-        # Clean up municipality
-        municipality = re.sub(r'\s*\(.*$', '', municipality)  # Remove everything from '(' onwards
-        municipality = re.sub(r'[\s,\-/]+$', '', municipality)  # Remove trailing spaces, commas, hyphens, slashes
-        
-        return municipality, address
+    if merge:
+        merged_df = pd.concat(all_dfs, ignore_index=True)
+        return merged_df.sort_values('CITY')  # Sort the merged DataFrame by CITY
     else:
-        return text.strip(), ''
+        return all_dfs
 
-def process_pdf(pdf_path):
-    df = extract_with_pdfplumber(pdf_path)
-    
-    # Apply the new function to split municipality and address
-    df[['CITY', 'ADD1']] = df['municipality_borough'].apply(lambda x: pd.Series(clean_text_and_extract_address(x)))
-    
-    output_df = pd.DataFrame({
-        'FNAM': 'À',
-        'LNAM': "l'occupant",
-        'ADD1': df['ADD1'],
-        'CITY': df['CITY'],
-        'PROV': 'QC',
-        'PC': df['postal_code']
-    })
-    
-    return output_df
-
-def save_to_excel(df, pdf_paths):
+def save_to_excel(dfs, pdf_paths, merge=False):
     current_time = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-    if len(pdf_paths) == 1:
-        output_filename = f'output_excel/{os.path.splitext(os.path.basename(pdf_paths[0]))[0]}_simple_{current_time}.xlsx'
+    
+    if merge:
+        output_filename = f'output_excel/merged_output_{current_time}.xlsx'
+        dfs.to_excel(output_filename, index=False)
+        auto_adjust_columns(output_filename)
+        print(f"Merged Excel file '{output_filename}' has been created successfully.")
     else:
-        output_filename = f'output_excel/merged_pdfs_simple_{current_time}.xlsx'
-    
-    # Save DataFrame to Excel
-    df.to_excel(output_filename, index=False)
-    
-    # Load the workbook and select the active sheet
-    wb = load_workbook(output_filename)
-    ws = wb.active
-    
-    # Auto-adjust columns
-    for column in ws.columns:
+        for df, pdf_path in zip(dfs, pdf_paths):
+            output_filename = f'output_excel/{os.path.splitext(os.path.basename(pdf_path))[0]}_{current_time}.xlsx'
+            df.sort_values('CITY').to_excel(output_filename, index=False)  # Sort before saving
+            auto_adjust_columns(output_filename)
+            print(f"Excel file '{output_filename}' has been created successfully.")
+
+def auto_adjust_columns(filename):
+    workbook = load_workbook(filename)
+    worksheet = workbook.active
+
+    for column in worksheet.columns:
         max_length = 0
         column_letter = get_column_letter(column[0].column)
         for cell in column:
@@ -80,15 +77,15 @@ def save_to_excel(df, pdf_paths):
                     max_length = len(cell.value)
             except:
                 pass
-        adjusted_width = (max_length + 2) * 1.2
-        ws.column_dimensions[column_letter].width = adjusted_width
-    
-    # Save the workbook
-    wb.save(output_filename)
-    print(f"Excel file '{output_filename}' has been created successfully with auto-adjusted columns.")
+        adjusted_width = (max_length + 2)
+        worksheet.column_dimensions[column_letter].width = adjusted_width
 
-def merge_dataframes(dfs):
-    return pd.concat(dfs, ignore_index=True)
+    # Use Excel's built-in autofit
+    for column in worksheet.columns:
+        column_letter = get_column_letter(column[0].column)
+        worksheet.column_dimensions[column_letter].auto_size = True
+
+    workbook.save(filename)
 
 if __name__ == "__main__":
     pdf_paths = get_pdf_paths()
@@ -96,18 +93,9 @@ if __name__ == "__main__":
         print("No PDF files selected. Exiting.")
         exit(1)
     
-    all_dfs = []
-    for pdf_path in pdf_paths:
-        output_df = process_pdf(pdf_path)
-        all_dfs.append(output_df)
+    merge = False
+    if len(pdf_paths) > 1:
+        merge = input("Do you want to merge the PDFs into a single Excel file? (y/n): ").lower() == 'y'
     
-    if len(all_dfs) > 1:
-        merge = input("Multiple PDFs selected. Do you want to merge them into a single Excel file? (y/n): ").lower()
-        if merge == 'y':
-            final_df = merge_dataframes(all_dfs)
-            save_to_excel(final_df, pdf_paths)
-        else:
-            for i, df in enumerate(all_dfs):
-                save_to_excel(df, [pdf_paths[i]])
-    else:
-        save_to_excel(all_dfs[0], pdf_paths)
+    output_dfs = process_pdfs(pdf_paths, merge)
+    save_to_excel(output_dfs, pdf_paths, merge)
