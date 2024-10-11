@@ -7,6 +7,8 @@ import re
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 import logging
+import tabula
+import time
 
 def setup_logging():
     logs_dir = 'logs'
@@ -132,6 +134,70 @@ def auto_adjust_columns(filename):
         worksheet.column_dimensions[column_letter].width = adjusted_width
 
     workbook.save(filename)
+
+def convert_pdf_to_excel(pdf_files, output_dir, merge_files=False, custom_filename=None, enable_logging=False):
+    if enable_logging:
+        setup_logging()
+    else:
+        logging.disable(logging.CRITICAL)  # Disable all logging
+    
+    logging.info(f"Converting PDFs: {pdf_files}")
+    
+    pdf_paths = [pdf_files] if isinstance(pdf_files, str) else pdf_files
+    total_files = len(pdf_paths)
+    
+    all_data = []
+    for i, pdf_path in enumerate(pdf_paths):
+        df = process_pdfs([pdf_path], merge=False)[0]
+        all_data.append(df)
+        progress = int((i + 1) / total_files * 90)  # Leave 10% for saving
+        yield progress  # Yield progress update
+    
+    current_time = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    if merge_files:
+        merged_df = pd.concat(all_data, ignore_index=True)
+        merged_df = merged_df.sort_values('CITY')  # Sort by CITY column
+        logging.info(f"First few cities after sorting: {merged_df['CITY'].head().tolist()}")
+        if custom_filename:
+            output_filename = os.path.join(output_dir, f'{custom_filename}.xlsx')
+        else:
+            output_filename = os.path.join(output_dir, f'merged_output_{current_time}.xlsx')
+        
+        logging.info(f"Attempting to save merged file: {output_filename}")
+        merged_df.to_excel(output_filename, index=False)
+        logging.info(f"Merged file saved successfully")
+        
+        # Add retry mechanism for auto_adjust_columns
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                time.sleep(1)  # Wait for 1 second before trying
+                auto_adjust_columns(output_filename)
+                logging.info(f"Columns adjusted for merged file")
+                break
+            except FileNotFoundError:
+                logging.warning(f"File not found, attempt {attempt + 1} of {max_retries}")
+                if attempt == max_retries - 1:
+                    logging.error(f"Failed to adjust columns after {max_retries} attempts")
+                    raise
+    else:
+        for i, df in enumerate(all_data):
+            df = df.sort_values('CITY')  # Sort individual files by CITY as well
+            logging.info(f"First few cities after sorting (file {i+1}): {df['CITY'].head().tolist()}")
+            if custom_filename:
+                output_filename = os.path.join(output_dir, f'{custom_filename}_{i+1}.xlsx')
+            else:
+                base_name = os.path.splitext(os.path.basename(pdf_paths[i]))[0]
+                output_filename = os.path.join(output_dir, f'{base_name}_{current_time}.xlsx')
+            df.to_excel(output_filename, index=False)
+            auto_adjust_columns(output_filename)
+            logging.info(f"Created Excel file: {output_filename}")
+    
+    yield 100  # Final progress update
+    logging.info("Conversion complete")
+
+    if not enable_logging:
+        logging.disable(logging.NOTSET)  # Re-enable logging for future runs
 
 if __name__ == "__main__":
     log_file = setup_logging()
