@@ -6,9 +6,6 @@ from datetime import datetime
 import re
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
-<<<<<<< HEAD
-
-=======
 import logging
 import tabula
 import time
@@ -29,7 +26,6 @@ def setup_logging():
     )
     return log_file
 
->>>>>>> executable
 def get_pdf_paths():
     root = Tk()
     root.withdraw()
@@ -55,32 +51,6 @@ def clean_text(text):
     original = text
     # Remove everything from the first opening parenthesis onwards
     cleaned = re.sub(r'\s*\(.*$', '', text)
-<<<<<<< HEAD
-    # Remove any trailing whitespace or punctuation
-    cleaned = re.sub(r'[\s\-,]+$', '', cleaned)
-    return cleaned.strip()
-
-def process_pdfs(pdf_paths, merge=False):
-    all_dfs = []
-    for pdf_path in pdf_paths:
-        df = extract_with_pdfplumber(pdf_path)
-        output_df = pd.DataFrame({
-            'FNAM': 'À',
-            'LNAM': "l'occupant",
-            'ADD1': df['address'].apply(clean_text),
-            'CITY': df['municipality_borough'].apply(clean_text),
-            'PROV': 'QC',
-            'PC': df['postal_code']
-        })
-        all_dfs.append(output_df)
-    
-    if merge:
-        merged_df = pd.concat(all_dfs, ignore_index=True)
-        return merged_df.sort_values('CITY')  # Sort by CITY column
-    else:
-        return all_dfs
-
-=======
     # Remove apartment numbers (various formats)
     cleaned = re.sub(r',?\s*(?:app?t?|unit|suite|#)\s*\d+[a-z]?$', '', cleaned, flags=re.IGNORECASE)
     # Remove any trailing whitespace or punctuation, but preserve trailing E. or O.
@@ -91,7 +61,23 @@ def process_pdfs(pdf_paths, merge=False):
         logging.info(f"Cleaned text: '{original}' -> '{cleaned}'")
     return cleaned
 
-def process_pdfs(pdf_paths, merge=False):
+def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False, 
+                merged_name="Full Name", default_values=None, file_format='xlsx',
+                output_dir=None, custom_filename=None):
+    if column_names is None:
+        column_names = {
+            'First Name': 'First Name',
+            'Last Name': 'Last Name',
+            'Address': 'Address',
+            'City': 'City',
+            'Province': 'Province',
+            'Postal Code': 'Postal Code'
+        }
+    
+    if default_values is None:
+        default_values = {}
+
+    current_time = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     all_dfs = []
     for pdf_path in pdf_paths:
         logging.info(f"Processing PDF: {pdf_path}")
@@ -102,62 +88,67 @@ def process_pdfs(pdf_paths, merge=False):
         df['municipality_borough'] = df['municipality_borough'].apply(lambda x: x.split('(')[0].strip())
         
         # Clean up addresses
-        df['address'] = df['address'].apply(lambda x: re.sub(r'^[a-zA-Z]', '', x).strip())  # Remove any leading single letter
+        df['address'] = df['address'].apply(lambda x: re.sub(r'^[a-zA-Z]', '', x).strip())
         df['address'] = df.apply(lambda row: row['address'] if row['address'].strip() else f"{row['municipality_borough']} {row['address']}", axis=1)
         
-        output_df = pd.DataFrame({
-            'FNAM': 'À',
-            'LNAM': "l'occupant",
-            'ADD1': df['address'].apply(clean_text),
-            'CITY': df['municipality_borough'],  # Don't apply clean_text to city names
-            'PROV': 'QC',
-            'PC': df['postal_code']
+        # Create the output DataFrame with the appropriate columns
+        output_data = {}
+        if merge_names:
+            col_name = merged_name
+            output_data[col_name] = default_values.get(col_name, "À l'occupant")
+        else:
+            for name_type in ['First Name', 'Last Name']:
+                col_name = column_names[name_type]
+                output_data[col_name] = default_values.get(col_name, 'À' if name_type == 'First Name' else "l'occupant")
+        
+        # Add other columns with their default values
+        output_data.update({
+            column_names['Address']: df['address'].apply(clean_text),
+            column_names['City']: df['municipality_borough'],
+            column_names['Province']: default_values.get(column_names['Province'], ''),
+            column_names['Postal Code']: df['postal_code']
         })
         
-        # Additional validation
-        output_df['ADD1'] = output_df.apply(lambda row: row['ADD1'].replace(row['CITY'], '', 1).strip() if row['ADD1'].startswith(row['CITY']) else row['ADD1'], axis=1)
+        output_df = pd.DataFrame(output_data)
+        
+        # Update the column name in the validation code
+        address_col = column_names['Address']
+        city_col = column_names['City']
+        output_df[address_col] = output_df.apply(
+            lambda row: row[address_col].replace(row[city_col], '', 1).strip() 
+            if row[address_col].startswith(row[city_col]) else row[address_col], 
+            axis=1
+        )
+        
+        # Sort the DataFrame by city
+        output_df = output_df.sort_values(by=city_col)
         
         logging.info(f"Processed {len(output_df)} rows for {pdf_path}")
         all_dfs.append(output_df)
     
-    if merge:
-        merged_df = pd.concat(all_dfs, ignore_index=True)
-        logging.info(f"Merged {len(merged_df)} total rows from all PDFs")
-        return merged_df.sort_values('CITY')
-    else:
-        return all_dfs
+    return all_dfs
 
->>>>>>> executable
 def save_to_excel(dfs, pdf_paths, merge=False):
     current_time = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     
     if merge:
         output_filename = f'output_excel/merged_output_{current_time}.xlsx'
-<<<<<<< HEAD
-=======
-        dfs.sort_values('CITY', inplace=True)  # Sort by CITY column
->>>>>>> executable
+        dfs.sort_values('City', inplace=True)  # Sort by City column
         dfs.to_excel(output_filename, index=False)
         auto_adjust_columns(output_filename)
         print(f"Merged Excel file '{output_filename}' has been created successfully.")
     else:
         for df, pdf_path in zip(dfs, pdf_paths):
             output_filename = f'output_excel/{os.path.splitext(os.path.basename(pdf_path))[0]}_{current_time}.xlsx'
-<<<<<<< HEAD
-=======
-            df.sort_values('CITY', inplace=True)  # Sort by CITY column
->>>>>>> executable
+            df.sort_values('City', inplace=True)  # Sort by City column
             df.to_excel(output_filename, index=False)
             auto_adjust_columns(output_filename)
             print(f"Excel file '{output_filename}' has been created successfully.")
 
 def auto_adjust_columns(filename):
-<<<<<<< HEAD
-=======
     from openpyxl import load_workbook
     from openpyxl.utils import get_column_letter
 
->>>>>>> executable
     workbook = load_workbook(filename)
     worksheet = workbook.active
 
@@ -170,33 +161,18 @@ def auto_adjust_columns(filename):
                     max_length = len(cell.value)
             except:
                 pass
-<<<<<<< HEAD
-        adjusted_width = (max_length + 2)
-        worksheet.column_dimensions[column_letter].width = adjusted_width
-
-    workbook.save(filename)
-
-if __name__ == "__main__":
-    pdf_paths = get_pdf_paths()
-    if not pdf_paths:
-        print("No PDF files selected. Exiting.")
-        exit(1)
-    
-    merge = input("Do you want to merge the PDFs into a single Excel file? (y/n): ").lower() == 'y'
-    
-    output_dfs = process_pdfs(pdf_paths, merge)
-    save_to_excel(output_dfs, pdf_paths, merge)
-=======
         adjusted_width = (max_length + 2) * 1.2  # Multiply by 1.2 for better fit
         worksheet.column_dimensions[column_letter].width = adjusted_width
 
     workbook.save(filename)
 
-def convert_pdf_to_excel(pdf_files, output_dir, merge_files=False, custom_filename=None, enable_logging=False):
+def convert_pdf_to_excel(pdf_files, output_dir, merge_files=False, custom_filename=None, 
+                        enable_logging=False, column_names=None, merge_names=False, 
+                        merged_name="Full Name", default_values=None, file_format='xlsx'):
     if enable_logging:
         setup_logging()
     else:
-        logging.disable(logging.CRITICAL)  # Disable all logging
+        logging.disable(logging.CRITICAL)
     
     logging.info(f"Converting PDFs: {pdf_files}")
     
@@ -205,56 +181,63 @@ def convert_pdf_to_excel(pdf_files, output_dir, merge_files=False, custom_filena
     
     all_data = []
     for i, pdf_path in enumerate(pdf_paths):
-        df = process_pdfs([pdf_path], merge=False)[0]
+        # Convert generator to list and get first item
+        df = list(process_pdfs([pdf_path], merge=False, 
+                         column_names=column_names, 
+                         merge_names=merge_names, 
+                         merged_name=merged_name,
+                         default_values=default_values, 
+                         file_format=file_format,
+                         output_dir=output_dir,
+                         custom_filename=custom_filename))[0]
         all_data.append(df)
-        progress = int((i + 1) / total_files * 90)  # Leave 10% for saving
-        yield progress  # Yield progress update
+        progress = int((i + 1) / total_files * 90)
+        yield progress
     
     current_time = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     if merge_files:
         merged_df = pd.concat(all_data, ignore_index=True)
-        merged_df = merged_df.sort_values('CITY')  # Sort by CITY column
-        logging.info(f"First few cities after sorting: {merged_df['CITY'].head().tolist()}")
+        city_column = column_names['City']
+        merged_df = merged_df.sort_values(city_column)
         if custom_filename:
-            output_filename = os.path.join(output_dir, f'{custom_filename}.xlsx')
+            output_filename = os.path.join(output_dir, f'{custom_filename}.{file_format}')
         else:
-            output_filename = os.path.join(output_dir, f'merged_output_{current_time}.xlsx')
+            output_filename = os.path.join(output_dir, f'merged_output_{current_time}.{file_format}')
         
         logging.info(f"Attempting to save merged file: {output_filename}")
-        merged_df.to_excel(output_filename, index=False)
-        logging.info(f"Merged file saved successfully")
+        if file_format == 'xlsx':
+            merged_df.to_excel(output_filename, index=False)
+            auto_adjust_columns(output_filename)
+        else:  # CSV format
+            merged_df.to_csv(output_filename, index=False, encoding='utf-8-sig')  # Added encoding for proper UTF-8 handling
         
-        # Add retry mechanism for auto_adjust_columns
-        max_retries = 5
-        for attempt in range(max_retries):
-            try:
-                time.sleep(1)  # Wait for 1 second before trying
-                auto_adjust_columns(output_filename)
-                logging.info(f"Columns adjusted for merged file")
-                break
-            except FileNotFoundError:
-                logging.warning(f"File not found, attempt {attempt + 1} of {max_retries}")
-                if attempt == max_retries - 1:
-                    logging.error(f"Failed to adjust columns after {max_retries} attempts")
-                    raise
+        yield output_filename
     else:
+        last_file = None
         for i, df in enumerate(all_data):
-            df = df.sort_values('CITY')  # Sort individual files by CITY as well
-            logging.info(f"First few cities after sorting (file {i+1}): {df['CITY'].head().tolist()}")
+            city_column = column_names['City']
+            df = df.sort_values(city_column)
             if custom_filename:
-                output_filename = os.path.join(output_dir, f'{custom_filename}_{i+1}.xlsx')
+                output_filename = os.path.join(output_dir, f'{custom_filename}_{i+1}.{file_format}')
             else:
                 base_name = os.path.splitext(os.path.basename(pdf_paths[i]))[0]
-                output_filename = os.path.join(output_dir, f'{base_name}_{current_time}.xlsx')
-            df.to_excel(output_filename, index=False)
-            auto_adjust_columns(output_filename)
-            logging.info(f"Created Excel file: {output_filename}")
+                output_filename = os.path.join(output_dir, f'{base_name}_{current_time}.{file_format}')
+            
+            if file_format == 'xlsx':
+                df.to_excel(output_filename, index=False)
+                auto_adjust_columns(output_filename)
+            else:  # CSV format
+                df.to_csv(output_filename, index=False, encoding='utf-8-sig')  # Added encoding for proper UTF-8 handling
+            
+            last_file = output_filename
+            logging.info(f"Created file: {output_filename}")
+        yield last_file
     
     yield 100  # Final progress update
     logging.info("Conversion complete")
 
     if not enable_logging:
-        logging.disable(logging.NOTSET)  # Re-enable logging for future runs
+        logging.disable(logging.NOTSET)
 
 if __name__ == "__main__":
     log_file = setup_logging()
@@ -276,4 +259,3 @@ if __name__ == "__main__":
     save_to_excel(output_dfs, pdf_paths, merge)
     
     logging.info(f"Conversion complete. Log file: {log_file}")
->>>>>>> executable

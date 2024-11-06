@@ -1,14 +1,19 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-
 block_cipher = None
 
 a = Analysis(
     ['pdf2excel_gui.py'],
     pathex=[],
     binaries=[],
-    datas=[],
-    hiddenimports=[],
+    datas=[('F2E.ico', '.')],
+    hiddenimports=[
+        'pandas',
+        'pdfplumber',
+        'openpyxl',
+        'tabula',
+        'PyQt5',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -18,8 +23,7 @@ a = Analysis(
     cipher=block_cipher,
     noarchive=False,
 )
-pyz = PYZ(a.pure, a.zipped_data,
-    cipher=block_cipher)
+pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(
     pyz,
@@ -28,7 +32,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='PDF2Excel_GUI_v1.0.0',
+    name='PDF2Excel_GUI',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -40,5 +44,6 @@ exe = EXE(
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
-    entitlements_file=None
+    entitlements_file=None,
+    icon='F2E.ico'
 )
