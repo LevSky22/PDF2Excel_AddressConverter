@@ -517,48 +517,70 @@ class ColumnSettingsDialog(QDialog):
     def load_preset(self, preset_name):
         """Load a specific preset"""
         if not preset_name:
+            # Reset to default values when no preset is selected
+            self.reset_to_defaults()
             return
-            
+        
         try:
             with open('column_presets.json', 'r', encoding='utf-8') as f:
                 presets = json.load(f)
                 if preset_name in presets:
                     settings = presets[preset_name]
                     
-                    # Load all settings from the preset
+                    # First update merge checkboxes only
                     self.merge_checkbox.setChecked(settings.get('merge_names', False))
+                    self.merge_address_checkbox.setChecked(settings.get('merge_address', False))
+                    
+                    # Update all input fields regardless of merge state
+                    for key in ['First Name', 'Last Name']:
+                        if key in self.column_inputs and key in settings.get('column_names', {}):
+                            self.column_inputs[key].setText(settings['column_names'][key])
+                            if key in settings.get('default_values', {}):
+                                self.default_inputs[key].setText(settings['default_values'][key])
+                    
+                    for key in ['Address', 'City', 'Province', 'Postal Code']:
+                        if key in self.column_inputs and key in settings.get('column_names', {}):
+                            self.column_inputs[key].setText(settings['column_names'][key])
+                            if key in settings.get('default_values', {}):
+                                self.default_inputs[key].setText(settings['default_values'][key])
+                    
+                    # Update merged fields
                     self.merged_name_input.setText(settings.get('merged_name', 'Full Name'))
                     self.merged_default_value.setText(settings.get('merged_default', "À l'occupant"))
-                    
-                    # Load address merge settings
-                    self.merge_address_checkbox.setChecked(settings.get('merge_address', False))
                     self.merged_address_input.setText(settings.get('merged_address_name', 'Complete Address'))
                     self.address_separator_input.setText(settings.get('address_separator', ', '))
                     self.province_default_input.setText(settings.get('province_default', 'QC'))
                     
-                    # Load apartment settings
+                    # Update other settings without forcing their enabled/disabled states
                     self.extract_apartment_checkbox.setChecked(settings.get('extract_apartment', False))
                     self.apartment_name_input.setText(settings.get('apartment_column_name', 'Apartment'))
                     self.filter_apartments_checkbox.setChecked(settings.get('filter_apartments', False))
                     self.include_apartment_checkbox.setChecked(settings.get('include_apartment_column', True))
                     
-                    # Load phone settings
                     self.include_phone_checkbox.setChecked(settings.get('include_phone', False))
                     self.phone_name_input.setText(settings.get('phone_column_name', 'Phone'))
                     self.phone_default_input.setText(settings.get('phone_default', ''))
                     
-                    # Load date settings
                     self.include_date_checkbox.setChecked(settings.get('include_date', False))
                     self.date_name_input.setText(settings.get('date_column_name', 'Date'))
                     if settings.get('date_value'):
                         self.date_picker.setDate(QDate.fromString(settings['date_value'], 'yyyy-MM-dd'))
                     
-                    # Update enabled states
+                    # Only force update of name and address merge states
                     self.on_merge_changed(settings.get('merge_names', False))
                     self.on_merge_address_changed(settings.get('merge_address', False))
-                    self.on_extract_apartment_changed(settings.get('extract_apartment', False))
-                    self.on_phone_changed(settings.get('include_phone', False))
-                    self.on_date_changed(settings.get('include_date', False))
+                    
+                    # Enable input fields for other settings based on their checkboxes
+                    self.apartment_name_input.setEnabled(self.extract_apartment_checkbox.isChecked())
+                    self.include_apartment_checkbox.setEnabled(self.extract_apartment_checkbox.isChecked())
+                    self.filter_apartments_checkbox.setEnabled(self.extract_apartment_checkbox.isChecked())
+                    
+                    self.phone_name_input.setEnabled(self.include_phone_checkbox.isChecked())
+                    self.phone_default_input.setEnabled(self.include_phone_checkbox.isChecked())
+                    
+                    self.date_name_input.setEnabled(self.include_date_checkbox.isChecked())
+                    self.date_picker.setEnabled(self.include_date_checkbox.isChecked())
+                    
         except FileNotFoundError:
             pass
 
@@ -619,24 +641,31 @@ class ColumnSettingsDialog(QDialog):
                 pass
 
     def on_merge_changed(self, state):
-        is_checked = state == Qt.Checked
+        """Handle merge names checkbox state change"""
+        # Convert Qt.Checked/Qt.Unchecked to boolean if needed
+        is_checked = state if isinstance(state, bool) else state == Qt.Checked
+        
+        # Set enabled state of merged name fields
         self.merged_name_input.setEnabled(is_checked)
         self.merged_default_value.setEnabled(is_checked)
         
-        # Toggle First/Last name inputs
+        # Only disable individual name fields, don't clear them
         for key in ['First Name', 'Last Name']:
             if key in self.column_inputs:
                 self.column_inputs[key].setEnabled(not is_checked)
                 self.default_inputs[key].setEnabled(not is_checked)
 
     def on_merge_address_changed(self, state):
-        is_checked = state == Qt.Checked
-        # Enable/disable merged address settings
+        """Handle merge address checkbox state change"""
+        # Convert Qt.Checked/Qt.Unchecked to boolean if needed
+        is_checked = state if isinstance(state, bool) else state == Qt.Checked
+        
+        # Set enabled state of merged address fields
         self.merged_address_input.setEnabled(is_checked)
         self.address_separator_input.setEnabled(is_checked)
         self.province_default_input.setEnabled(is_checked)
         
-        # Disable individual address field inputs when merged
+        # Only disable individual address fields, don't clear them
         address_fields = ['Address', 'City', 'Province', 'Postal Code']
         for field in address_fields:
             if field in self.column_inputs:
@@ -703,6 +732,46 @@ class ColumnSettingsDialog(QDialog):
                 settings['default_values'][column_name] = self.default_inputs[key].text()
         
         return settings
+
+    def reset_to_defaults(self):
+        """Reset all fields to their default values"""
+        # Reset checkboxes
+        self.merge_checkbox.setChecked(False)
+        self.merge_address_checkbox.setChecked(False)
+        self.extract_apartment_checkbox.setChecked(False)
+        self.include_phone_checkbox.setChecked(False)
+        self.include_date_checkbox.setChecked(False)
+        
+        # Reset column names to defaults
+        default_columns = {
+            'First Name': 'First Name',
+            'Last Name': 'Last Name',
+            'Address': 'Address',
+            'City': 'City',
+            'Province': 'Province',
+            'Postal Code': 'Postal Code'
+        }
+        
+        for key, value in default_columns.items():
+            if key in self.column_inputs:
+                self.column_inputs[key].setText(value)
+                self.default_inputs[key].setText("")
+        
+        # Reset merged fields
+        self.merged_name_input.setText("Full Name")
+        self.merged_default_value.setText("À l'occupant")
+        self.merged_address_input.setText("Complete Address")
+        self.address_separator_input.setText(", ")
+        self.province_default_input.setText("QC")
+        
+        # Reset other fields
+        self.apartment_name_input.setText("Apartment")
+        self.filter_apartments_checkbox.setChecked(False)
+        self.include_apartment_checkbox.setChecked(True)
+        self.phone_name_input.setText("Phone")
+        self.phone_default_input.setText("")
+        self.date_name_input.setText("Date")
+        self.date_picker.setDate(QDate.currentDate())
 
 class PDFToExcelGUI(QMainWindow):
     def __init__(self):
