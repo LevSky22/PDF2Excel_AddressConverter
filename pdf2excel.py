@@ -9,6 +9,7 @@ from openpyxl.utils import get_column_letter
 import logging
 import tabula
 import time
+from quebec_regions_mapping import get_shore_region
 
 def setup_logging():
     logs_dir = 'logs'
@@ -50,29 +51,64 @@ def extract_with_pdfplumber(pdf_path):
 def extract_apartment(text):
     # Expanded regex pattern to handle more apartment formats
     apt_patterns = [
-        # Basic pattern for numeric apartments with optional letters
-        r',?\s*((?:app?t?\.?\s*|apt\.?\s*|unit\s*|suite\s*|#\s*)(?:\d+(?:-\d+)?|[a-z]\d*|\d*[a-z]?))\s*$',
+        # Handle any combination after apt. (letters, numbers, or both)
+        r',?\s+((?:app(?:artement)?\.?|apt\.?)\s*[a-z0-9]+(?:-[a-z0-9]+)?)\s*$',
         
-        # Pattern for special unit types (PH, TH, etc.) with numbers
-        r',?\s*((?:app?t?\.?\s*|apt\.?\s*|unit\s*|suite\s*|#\s*)(?:ph|th|penthouse|townhouse)\.?\s*\d+(?:-\d+)?)\s*$',
+        # Handle single letters after apt.
+        r',?\s+((?:app(?:artement)?\.?|apt\.?)\s*[a-z])\s*$',
         
-        # Pattern for complex combinations with hyphens
-        r',?\s*((?:app?t?\.?\s*|apt\.?\s*|unit\s*|suite\s*|#\s*)(?:[a-z0-9]+-[a-z0-9]+(?:-[a-z0-9]+)?))\s*$',
+        # Other unit indicators
+        r',?\s+((?:unit|suite|#)\s*[a-z0-9]+(?:-[a-z0-9]+)?)\s*$',
         
-        # Pattern for letter-only units
-        r',?\s*((?:app?t?\.?\s*|apt\.?\s*|unit\s*|suite\s*|#\s*)[a-z])\s*$',
+        # Special unit types
+        r',?\s+((?:app(?:artement)?\.?|apt\.?|unit|suite|#)\s*(?:ph|th|penthouse|townhouse)\s*\d*)\s*$',
         
-        # Pattern for special unit designations
-        r',?\s*((?:app?t?\.?\s*|apt\.?\s*|unit\s*|suite\s*|#\s*)(?:ph|th|penthouse|townhouse))\s*$'
+        # Basement/ground floor
+        r',?\s+((?:sous-sol|basement|rez-de-chaussée|ss|rdj|rdc)(?:\s*\d+)?)\s*$',
+        
+        # French logement
+        r',?\s+((?:logement|log\.?)\s*[a-z0-9]+(?:-[a-z0-9]+)?)\s*$'
     ]
     
+    # Convert text to lowercase for case-insensitive matching
+    text_lower = text.lower() if text else ""
+    
+    # First check for explicit apartment indicators with any characters
     for pattern in apt_patterns:
-        match = re.search(pattern, text, flags=re.IGNORECASE)
+        match = re.search(pattern, text_lower, flags=re.IGNORECASE)
         if match:
-            apartment = match.group(1).strip()
+            # Use the original text case for the apartment number
+            apartment = text[match.start(1):match.end(1)].strip()
             # Remove the apartment info and any trailing commas/spaces
             clean_address = re.sub(pattern, '', text, flags=re.IGNORECASE).strip().rstrip(',')
             return clean_address, apartment
+    
+    # Check for apartment indicators in middle of address
+    middle_apt_patterns = [
+        # Handle any combination after apt.
+        r'((?:app(?:artement)?\.?|apt\.?)\s*[a-z0-9]+(?:-[a-z0-9]+)?)',
+        # Other unit indicators
+        r'((?:unit|suite|#)\s*[a-z0-9]+(?:-[a-z0-9]+)?)',
+        # French variations
+        r'((?:logement|log\.?)\s*[a-z0-9]+(?:-[a-z0-9]+)?)'
+    ]
+    
+    for pattern in middle_apt_patterns:
+        match = re.search(pattern, text_lower)
+        if match:
+            # Return the full matched apartment text
+            apartment = text[match.start(1):match.end(1)].strip()
+            clean_address = text[:match.start(0)].strip()
+            return clean_address, apartment
+    
+    # Check for just characters after comma as last resort
+    comma_apt_pattern = r',\s*((?:no\.?\s*)?[a-z0-9]+(?:-[a-z0-9]+)?)\s*$'
+    match = re.search(comma_apt_pattern, text_lower)
+    if match:
+        # Add 'apt.' prefix to bare numbers/letters
+        apartment = 'apt. ' + text[match.start(1):match.end(1)].strip()
+        clean_address = re.sub(comma_apt_pattern, '', text).strip()
+        return clean_address, apartment
     
     return text, None
 
@@ -80,7 +116,6 @@ def clean_text(text, extract_apt=False):
     if not text:
         return ("", None) if extract_apt else ""
         
-    original = text
     # Remove everything from the first opening parenthesis onwards
     cleaned = re.sub(r'\s*\(.*$', '', text)
     
@@ -92,10 +127,8 @@ def clean_text(text, extract_apt=False):
         cleaned = cleaned.strip()
         return cleaned, apartment
     else:
-        # Remove apartment numbers without extracting them
-        apt_pattern = r',?\s*(?:app?t?\.?\s*|apt\.?\s*|unit\s*|suite\s*|#\s*)(?:\d+(?:-\d+)?|[a-z]\d*|\d*[a-z]?|(?:ph|th|penthouse|townhouse)\.?\s*\d*(?:-\d+)?|[a-z0-9]+-[a-z0-9]+(?:-[a-z0-9]+)?)\s*$'
-        cleaned = re.sub(apt_pattern, '', cleaned, flags=re.IGNORECASE)
-        # Clean up any remaining trailing punctuation
+        # When not extracting apartments, preserve the original address format
+        # Just clean up trailing punctuation without removing apartment info
         cleaned = re.sub(r'[\s\-,]+(?<!E)(?<!O)\.?$', '', cleaned)
         cleaned = cleaned.strip()
         return cleaned
@@ -107,7 +140,8 @@ def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False,
                 province_default="QC", extract_apartment=False, apartment_column_name="Apartment",
                 filter_apartments=False, include_apartment_column=True,
                 include_phone=False, phone_default="", 
-                include_date=False, date_value=None):
+                include_date=False, date_value=None,
+                filter_by_region=False, region_branch_ids=None):
     if column_names is None:
         column_names = {
             'First Name': 'First Name',
@@ -138,28 +172,50 @@ def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False,
         # Create the output DataFrame with the appropriate columns
         output_data = {}
         
+        # Add branch ID based on region if filtering is enabled
+        if filter_by_region and region_branch_ids:
+            branch_ids = []
+            filtered_indices = []
+            
+            for idx, row in df.iterrows():
+                region = get_shore_region(row['municipality_borough'])
+                # Handle unknown regions by using the 'flyer_unknown' branch ID if available
+                branch_id = region_branch_ids.get(f'flyer_{region}', region_branch_ids.get('flyer_unknown', 'unknown'))
+                branch_ids.append(branch_id)
+                filtered_indices.append(idx)
+            
+            # Filter the DataFrame first if region filtering is enabled
+            if filtered_indices:
+                df = df.iloc[filtered_indices]
+            else:
+                # No matching regions found, return empty DataFrame
+                return [pd.DataFrame()]
+        
         # Handle name fields
         if merge_names:
-            output_data[merged_name] = default_values.get(merged_name, "À l'occupant")
+            output_data[merged_name] = [default_values.get(merged_name, "À l'occupant")] * len(df)
         else:
             for name_type in ['First Name', 'Last Name']:
                 col_name = column_names[name_type]
-                output_data[col_name] = default_values.get(col_name, 'À' if name_type == 'First Name' else "l'occupant")
+                output_data[col_name] = [default_values.get(col_name, 'À' if name_type == 'First Name' else "l'occupant")] * len(df)
+        
+        # Add Branch ID column if region filtering is enabled
+        if filter_by_region and region_branch_ids and len(df) > 0:
+            output_data['Branch ID'] = [region_branch_ids.get(f'flyer_{get_shore_region(city)}', region_branch_ids.get('flyer_unknown', 'unknown')) for city in df['municipality_borough']]
         
         # Handle address fields
         if merge_address:
             merged_addresses = []
-            apartments = [] if extract_apartment else None
-            has_apartment = []  # Track which rows have apartments
+            apartments = []
+            has_apartment = []
             
             for _, row in df.iterrows():
                 if extract_apartment:
                     clean_addr, apt = clean_text(row['address'], extract_apt=True)
                     has_apartment.append(apt is not None)
+                    apartments.append(apt)
                 else:
                     clean_addr = clean_text(row['address'])
-                    apt = None
-                    has_apartment.append(False)
                 
                 address_parts = [
                     clean_addr,
@@ -169,22 +225,12 @@ def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False,
                 ]
                 merged_address = address_separator.join(filter(None, address_parts))
                 merged_addresses.append(merged_address)
-                
-                if extract_apartment:
-                    apartments.append(apt)
             
             # Create DataFrame with all data
             output_data[merged_address_name] = merged_addresses
             if extract_apartment and include_apartment_column:
                 output_data[apartment_column_name] = apartments
-            
-            # Filter out rows with apartments if requested
-            if filter_apartments:
-                output_df = pd.DataFrame(output_data)
-                output_df = output_df[~pd.Series(has_apartment)]
-            else:
-                output_df = pd.DataFrame(output_data)
-                
+        
         else:
             if extract_apartment:
                 # Extract apartments while cleaning addresses
@@ -207,35 +253,24 @@ def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False,
                 
                 if include_apartment_column:
                     output_data[apartment_column_name] = apartments
-                
-                # Create DataFrame and filter if requested
-                output_df = pd.DataFrame(output_data)
-                if filter_apartments:
-                    output_df = output_df[~pd.Series(has_apartment)]
             else:
-                # Original behavior without apartment extraction
+                # Just pass through addresses without any apartment processing
                 output_data.update({
                     column_names['Address']: df['address'].apply(lambda x: clean_text(x, extract_apt=False)),
                     column_names['City']: df['municipality_borough'],
                     column_names['Province']: default_values.get(column_names['Province'], ''),
                     column_names['Postal Code']: df['postal_code']
                 })
-                output_df = pd.DataFrame(output_data)
         
-        # Add phone number if enabled
-        if include_phone:
-            output_data[column_names.get('Phone', 'Phone')] = [phone_default] * len(df)
-        
-        # Add date if enabled
-        if include_date and date_value:
-            output_data[column_names.get('Date', 'Date')] = [date_value] * len(df)
-        
-        # Create DataFrame and handle filtering
+        # Create DataFrame with all data
         output_df = pd.DataFrame(output_data)
         
-        # Apply filtering if needed
-        if filter_apartments and extract_apartment:
-            output_df = output_df[~pd.Series(has_apartment)]
+        # Only filter apartments if both extract_apartment and filter_apartments are True
+        if extract_apartment and filter_apartments and 'has_apartment' in locals():
+            logging.info(f"Filtering out addresses with apartments (before: {len(output_df)} rows)")
+            # Create a new DataFrame instead of modifying a view
+            output_df = output_df[~pd.Series(has_apartment)].copy()
+            logging.info(f"After filtering: {len(output_df)} rows")
         
         # Determine sort column and handle address cleanup
         if merge_address:
@@ -245,6 +280,8 @@ def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False,
             # Clean up address if city is included
             address_col = column_names['Address']
             city_col = column_names['City']
+            # Create a copy before modifying to avoid SettingWithCopyWarning
+            output_df = output_df.copy()
             output_df[address_col] = output_df.apply(
                 lambda row: row[address_col].replace(row[city_col], '', 1).strip() 
                 if row[address_col].startswith(row[city_col]) else row[address_col], 
@@ -252,7 +289,7 @@ def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False,
             )
         
         # Sort the DataFrame
-        output_df = output_df.sort_values(by=sort_column)
+        output_df = output_df.sort_values(by=sort_column).copy()
         
         logging.info(f"Processed {len(output_df)} rows for {pdf_path}")
         all_dfs.append(output_df)
@@ -276,26 +313,46 @@ def save_to_excel(dfs, pdf_paths, merge=False):
             auto_adjust_columns(output_filename)
             print(f"Excel file '{output_filename}' has been created successfully.")
 
-def auto_adjust_columns(filename):
-    from openpyxl import load_workbook
-    from openpyxl.utils import get_column_letter
+def auto_adjust_columns(filename, df=None):
+    """Auto-adjust column widths for Excel files or format CSV content"""
+    if filename.endswith('.xlsx'):
+        # Excel file adjustment
+        workbook = load_workbook(filename)
+        worksheet = workbook.active
 
-    workbook = load_workbook(filename)
-    worksheet = workbook.active
+        for column in worksheet.columns:
+            max_length = 0
+            column_letter = get_column_letter(column[0].column)
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(cell.value)
+                except:
+                    pass
+            adjusted_width = (max_length + 2) * 1.2  # Multiply by 1.2 for better fit
+            worksheet.column_dimensions[column_letter].width = adjusted_width
 
-    for column in worksheet.columns:
-        max_length = 0
-        column_letter = get_column_letter(column[0].column)
-        for cell in column:
-            try:
-                if len(str(cell.value)) > max_length:
-                    max_length = len(cell.value)
-            except:
-                pass
-        adjusted_width = (max_length + 2) * 1.2  # Multiply by 1.2 for better fit
-        worksheet.column_dimensions[column_letter].width = adjusted_width
-
-    workbook.save(filename)
+        workbook.save(filename)
+    
+    elif filename.endswith('.csv') and df is not None:
+        # For CSV, format the DataFrame before saving
+        formatted_df = df.copy()
+        
+        # Calculate max width for each column
+        max_lengths = {}
+        for column in formatted_df.columns:
+            # Get max length including header
+            max_lengths[column] = max(
+                formatted_df[column].astype(str).str.len().max(),
+                len(str(column))
+            )
+        
+        # Format each column with consistent width
+        for column in formatted_df.columns:
+            width = max_lengths[column]
+            formatted_df[column] = formatted_df[column].astype(str).str.ljust(width)
+        
+        return formatted_df
 
 def convert_pdf_to_excel(pdf_files, output_dir, merge_files=False, custom_filename=None, 
                         enable_logging=False, column_names=None, merge_names=False, 
@@ -305,7 +362,8 @@ def convert_pdf_to_excel(pdf_files, output_dir, merge_files=False, custom_filena
                         extract_apartment=False, apartment_column_name="Apartment",
                         filter_apartments=False, include_apartment_column=True,
                         include_phone=False, phone_default="",
-                        include_date=False, date_value=None):
+                        include_date=False, date_value=None,
+                        filter_by_region=False, region_branch_ids=None):
     if enable_logging:
         setup_logging()
     else:
@@ -337,7 +395,9 @@ def convert_pdf_to_excel(pdf_files, output_dir, merge_files=False, custom_filena
                          include_phone=include_phone,
                          phone_default=phone_default,
                          include_date=include_date,
-                         date_value=date_value)
+                         date_value=date_value,
+                         filter_by_region=filter_by_region,
+                         region_branch_ids=region_branch_ids)
         all_data.extend(dfs)
         progress = int((i + 1) / total_files * 90)
         yield progress
@@ -345,6 +405,10 @@ def convert_pdf_to_excel(pdf_files, output_dir, merge_files=False, custom_filena
     current_time = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     if merge_files:
         merged_df = pd.concat(all_data, ignore_index=True)
+        
+        # Format date column if it exists
+        if include_date and 'Date' in merged_df.columns:
+            merged_df['Date'] = pd.to_datetime(merged_df['Date']).dt.strftime('%Y-%m-%d')
         
         # Remove apartment column if not included
         if extract_apartment and not include_apartment_column and apartment_column_name in merged_df.columns:
@@ -368,12 +432,17 @@ def convert_pdf_to_excel(pdf_files, output_dir, merge_files=False, custom_filena
             merged_df.to_excel(output_filename, index=False)
             auto_adjust_columns(output_filename)
         else:  # CSV format
-            merged_df.to_csv(output_filename, index=False, encoding='utf-8-sig')
+            formatted_df = auto_adjust_columns(output_filename, merged_df)
+            formatted_df.to_csv(output_filename, index=False, encoding='utf-8-sig')
         
         yield output_filename
     else:
         last_file = None
         for i, df in enumerate(all_data):
+            # Format date column if it exists
+            if include_date and 'Date' in df.columns:
+                df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
+            
             if custom_filename:
                 output_filename = os.path.join(output_dir, f'{custom_filename}_{i+1}.{file_format}')
             else:
@@ -392,7 +461,8 @@ def convert_pdf_to_excel(pdf_files, output_dir, merge_files=False, custom_filena
                 df.to_excel(output_filename, index=False)
                 auto_adjust_columns(output_filename)
             else:  # CSV format
-                df.to_csv(output_filename, index=False, encoding='utf-8-sig')
+                formatted_df = auto_adjust_columns(output_filename, df)
+                formatted_df.to_csv(output_filename, index=False, encoding='utf-8-sig')
             
             last_file = output_filename
             logging.info(f"Created file: {output_filename}")

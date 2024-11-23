@@ -14,6 +14,7 @@ import time
 import logging
 import json
 import ctypes
+from quebec_regions_mapping import get_shore_region
 
 VERSION = "1.1"
 
@@ -86,6 +87,15 @@ translations = {
         'include_date': "Inclure la date",
         'date_column_name': "Nom de la colonne date",
         'date_value': "Sélectionner la date",
+        'filter_by_region': "Filtrer par région",
+        'region_settings': "Paramètres des régions",
+        'branch_id': "ID de succursale",
+        'north_shore': "Rive Nord",
+        'south_shore': "Rive Sud",
+        'montreal': "Montréal",
+        'laval': "Laval",
+        'longueuil': "Longueuil",
+        'unknown': "Inconnu",
     },
     'English': {
         'window_title': "PDF to Excel Converter",
@@ -154,6 +164,15 @@ translations = {
         'include_date': "Include date",
         'date_column_name': "Date column name",
         'date_value': "Select date",
+        'filter_by_region': "Filter by region",
+        'region_settings': "Region settings",
+        'branch_id': "Branch ID",
+        'north_shore': "North Shore",
+        'south_shore': "South Shore",
+        'montreal': "Montreal",
+        'laval': "Laval",
+        'longueuil': "Longueuil",
+        'unknown': "Unknown",
     }
 }
 
@@ -219,10 +238,17 @@ class ConversionThread(QThread):
         self.include_date = False
         self.date_column_name = "Date"
         self.date_value = None
+        self.filter_by_region = False
+        self.region_branch_ids = None
 
     def run(self):
         try:
             output_file = None
+            # Only apply apartment filtering if explicitly set to True
+            should_filter = (self.extract_apartment and 
+                            hasattr(self, 'filter_apartments') and 
+                            self.filter_apartments is True)
+            
             for progress in convert_pdf_to_excel(
                 self.pdf_files, 
                 self.output_dir, 
@@ -240,12 +266,14 @@ class ConversionThread(QThread):
                 self.province_default,
                 self.extract_apartment,
                 self.apartment_column_name,
-                self.filter_apartments,
+                should_filter,  # Pass the explicit filter check here
                 self.include_apartment_column,
                 self.include_phone,
                 self.phone_default,
                 self.include_date,
-                self.date_value
+                self.date_value,
+                self.filter_by_region,
+                self.region_branch_ids
             ):
                 if isinstance(progress, str):
                     output_file = progress
@@ -472,6 +500,40 @@ class ColumnSettingsDialog(QDialog):
         date_group_layout.addLayout(date_settings)
         layout.addWidget(date_group)
         
+        # Add region settings
+        region_group = QFrame()
+        region_group.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
+        region_group_layout = QVBoxLayout(region_group)
+        
+        self.filter_region_checkbox = QCheckBox(translations[self.parent.language]['filter_by_region'])
+        self.filter_region_checkbox.setStyleSheet("QCheckBox { font-weight: bold; padding: 5px; }")
+        self.filter_region_checkbox.stateChanged.connect(self.on_region_filter_changed)
+        region_group_layout.addWidget(self.filter_region_checkbox)
+        
+        # Create region branch ID inputs
+        self.region_inputs = {}
+        regions = {
+            'flyer_north_shore': ('north_shore', 'flyer_north_shore'),
+            'flyer_south_shore': ('south_shore', 'flyer_south_shore'),
+            'flyer_montreal': ('montreal', 'flyer_montreal'),
+            'flyer_laval': ('laval', 'flyer_laval'),
+            'flyer_longueuil': ('longueuil', 'flyer_longueuil'),
+            'flyer_unknown': ('unknown', 'flyer_unknown')
+        }
+        
+        for region_key, (translation_key, default_id) in regions.items():
+            row_layout = QHBoxLayout()
+            row_layout.addWidget(QLabel(translations[self.parent.language][translation_key]))
+            branch_input = QLineEdit()
+            branch_input.setPlaceholderText(default_id)
+            branch_input.setText(default_id)  # Set default value
+            branch_input.setEnabled(False)
+            self.region_inputs[region_key] = branch_input
+            row_layout.addWidget(branch_input)
+            region_group_layout.addLayout(row_layout)
+        
+        layout.addWidget(region_group)
+        
         # Set initial states
         self.on_merge_changed(merge_names)
         self.on_merge_address_changed(False)
@@ -527,6 +589,17 @@ class ColumnSettingsDialog(QDialog):
                 if preset_name in presets:
                     settings = presets[preset_name]
                     
+                    # Update apartment settings first - ensure defaults if not specified
+                    extract_apt = settings.get('extract_apartment', False)
+                    self.extract_apartment_checkbox.setChecked(extract_apt)
+                    self.on_extract_apartment_changed(extract_apt)  # Explicitly call the handler
+                    
+                    if extract_apt:
+                        self.apartment_name_input.setText(settings.get('apartment_column_name', 'Apartment'))
+                        # Only set these if they're explicitly True in the settings
+                        self.include_apartment_checkbox.setChecked(settings.get('include_apartment_column', True))
+                        self.filter_apartments_checkbox.setChecked(settings.get('filter_apartments', False))
+                    
                     # First update merge checkboxes only
                     self.merge_checkbox.setChecked(settings.get('merge_names', False))
                     self.merge_address_checkbox.setChecked(settings.get('merge_address', False))
@@ -546,17 +619,12 @@ class ColumnSettingsDialog(QDialog):
                     
                     # Update merged fields
                     self.merged_name_input.setText(settings.get('merged_name', 'Full Name'))
-                    self.merged_default_value.setText(settings.get('merged_default', "À l'occupant"))
+                    self.merged_default_value.setText(settings.get('merged_default', " l'occupant"))
                     self.merged_address_input.setText(settings.get('merged_address_name', 'Complete Address'))
                     self.address_separator_input.setText(settings.get('address_separator', ', '))
                     self.province_default_input.setText(settings.get('province_default', 'QC'))
                     
                     # Update other settings without forcing their enabled/disabled states
-                    self.extract_apartment_checkbox.setChecked(settings.get('extract_apartment', False))
-                    self.apartment_name_input.setText(settings.get('apartment_column_name', 'Apartment'))
-                    self.filter_apartments_checkbox.setChecked(settings.get('filter_apartments', False))
-                    self.include_apartment_checkbox.setChecked(settings.get('include_apartment_column', True))
-                    
                     self.include_phone_checkbox.setChecked(settings.get('include_phone', False))
                     self.phone_name_input.setText(settings.get('phone_column_name', 'Phone'))
                     self.phone_default_input.setText(settings.get('phone_default', ''))
@@ -571,16 +639,34 @@ class ColumnSettingsDialog(QDialog):
                     self.on_merge_address_changed(settings.get('merge_address', False))
                     
                     # Enable input fields for other settings based on their checkboxes
-                    self.apartment_name_input.setEnabled(self.extract_apartment_checkbox.isChecked())
-                    self.include_apartment_checkbox.setEnabled(self.extract_apartment_checkbox.isChecked())
-                    self.filter_apartments_checkbox.setEnabled(self.extract_apartment_checkbox.isChecked())
-                    
                     self.phone_name_input.setEnabled(self.include_phone_checkbox.isChecked())
                     self.phone_default_input.setEnabled(self.include_phone_checkbox.isChecked())
                     
                     self.date_name_input.setEnabled(self.include_date_checkbox.isChecked())
                     self.date_picker.setEnabled(self.include_date_checkbox.isChecked())
                     
+                    # Update region filter settings
+                    self.filter_region_checkbox.setChecked(settings.get('filter_by_region', False))
+                    region_branch_ids = settings.get('region_branch_ids', {})
+                    
+                    # Update default regions dictionary to include flyer_unknown
+                    default_regions = {
+                        'flyer_north_shore': 'flyer_north_shore',
+                        'flyer_south_shore': 'flyer_south_shore',
+                        'flyer_montreal': 'flyer_montreal',
+                        'flyer_laval': 'flyer_laval',
+                        'flyer_longueuil': 'flyer_longueuil',
+                        'flyer_unknown': 'flyer_unknown'
+                    }
+                    
+                    # Update region inputs and keep them enabled if filter is checked
+                    is_filter_enabled = settings.get('filter_by_region', False)
+                    for region_key, input_field in self.region_inputs.items():
+                        # Use get() method to provide a fallback if key doesn't exist
+                        default_value = default_regions.get(region_key, region_key)
+                        input_field.setText(region_branch_ids.get(region_key, default_value))
+                        input_field.setEnabled(is_filter_enabled)
+                
         except FileNotFoundError:
             pass
 
@@ -673,10 +759,19 @@ class ColumnSettingsDialog(QDialog):
                 self.default_inputs[field].setEnabled(not is_checked)
 
     def on_extract_apartment_changed(self, state):
-        is_checked = state == Qt.Checked
+        """Handle extract apartment checkbox state change"""
+        is_checked = state if isinstance(state, bool) else state == Qt.Checked
+        
+        # Enable/disable apartment-related inputs
         self.apartment_name_input.setEnabled(is_checked)
         self.include_apartment_checkbox.setEnabled(is_checked)
         self.filter_apartments_checkbox.setEnabled(is_checked)
+        
+        # Reset values if unchecked
+        if not is_checked:
+            self.include_apartment_checkbox.setChecked(False)
+            self.filter_apartments_checkbox.setChecked(False)
+            self.apartment_name_input.setText("Apartment")
 
     def on_phone_changed(self, state):
         is_checked = state == Qt.Checked
@@ -688,48 +783,55 @@ class ColumnSettingsDialog(QDialog):
         self.date_name_input.setEnabled(is_checked)
         self.date_picker.setEnabled(is_checked)
 
+    def on_region_filter_changed(self, state):
+        """Handle region filter checkbox state change"""
+        is_checked = state == Qt.Checked
+        for input_field in self.region_inputs.values():
+            input_field.setEnabled(is_checked)
+            if is_checked and not input_field.text():
+                # Set default value if empty when enabled
+                region_key = [k for k, v in self.region_inputs.items() if v == input_field][0]
+                input_field.setText(region_key)
+
     def get_settings(self):
+        """Get all settings from the dialog"""
         settings = {
             'merge_names': self.merge_checkbox.isChecked(),
-            'merged_name': self.merged_name_input.text() if self.merge_checkbox.isChecked() else None,
-            'column_names': {},
-            'default_values': {},
+            'merged_name': self.merged_name_input.text(),
+            'column_names': {
+                key: self.column_inputs[key].text() 
+                for key in self.original_columns.keys()
+            },
+            'default_values': {
+                self.column_inputs[key].text(): self.default_inputs[key].text() 
+                for key in self.original_columns.keys()
+            },
             'merge_address': self.merge_address_checkbox.isChecked(),
             'merged_address_name': self.merged_address_input.text(),
             'address_separator': self.address_separator_input.text(),
             'province_default': self.province_default_input.text(),
+            # Explicitly set extract_apartment to False if unchecked
             'extract_apartment': self.extract_apartment_checkbox.isChecked(),
-            'apartment_column_name': self.apartment_name_input.text(),
-            'filter_apartments': self.filter_apartments_checkbox.isChecked(),
-            'include_apartment_column': self.include_apartment_checkbox.isChecked(),
+            'apartment_column_name': self.apartment_name_input.text() if self.extract_apartment_checkbox.isChecked() else None,
+            'filter_apartments': self.filter_apartments_checkbox.isChecked() if self.extract_apartment_checkbox.isChecked() else False,
+            'include_apartment_column': self.include_apartment_checkbox.isChecked() if self.extract_apartment_checkbox.isChecked() else False,
             'include_phone': self.include_phone_checkbox.isChecked(),
             'phone_column_name': self.phone_name_input.text(),
             'phone_default': self.phone_default_input.text(),
             'include_date': self.include_date_checkbox.isChecked(),
             'date_column_name': self.date_name_input.text(),
-            'date_value': self.date_picker.date().toString('yyyy-MM-dd') if self.include_date_checkbox.isChecked() else None
+            'date_value': self.date_picker.date().toString('yyyy-MM-dd') if self.include_date_checkbox.isChecked() else None,
+            'filter_by_region': self.filter_region_checkbox.isChecked(),
+            'region_branch_ids': {
+                region: input_field.text()
+                for region, input_field in self.region_inputs.items()
+                if self.filter_region_checkbox.isChecked()
+            }
         }
         
-        # Handle name fields
+        # Add merged name default value if merge names is checked
         if settings['merge_names']:
-            settings['column_names'][settings['merged_name']] = settings['merged_name']
             settings['default_values'][settings['merged_name']] = self.merged_default_value.text()
-        else:
-            # Add First/Last name columns
-            for key in ['First Name', 'Last Name']:
-                column_name = self.column_inputs[key].text()
-                settings['column_names'][key] = column_name
-                settings['default_values'][column_name] = self.default_inputs[key].text()
-        
-        if settings['merge_address']:
-            # When merging addresses, only set the Address column name to the merged name
-            settings['column_names']['Address'] = settings['merged_address_name']
-        else:
-            # When not merging addresses, add all address-related columns
-            for key in ['Address', 'City', 'Province', 'Postal Code']:
-                column_name = self.column_inputs[key].text()
-                settings['column_names'][key] = column_name
-                settings['default_values'][column_name] = self.default_inputs[key].text()
         
         return settings
 
@@ -772,6 +874,21 @@ class ColumnSettingsDialog(QDialog):
         self.phone_default_input.setText("")
         self.date_name_input.setText("Date")
         self.date_picker.setDate(QDate.currentDate())
+        
+        # Reset region settings
+        self.filter_region_checkbox.setChecked(False)
+        default_regions = {
+            'flyer_north_shore': 'flyer_north_shore',
+            'flyer_south_shore': 'flyer_south_shore',
+            'flyer_montreal': 'flyer_montreal',
+            'flyer_laval': 'flyer_laval',
+            'flyer_longueuil': 'flyer_longueuil',
+            'flyer_unknown': 'flyer_unknown'
+        }
+        for region_key, default_id in default_regions.items():
+            if region_key in self.region_inputs:
+                self.region_inputs[region_key].setText(default_id)
+                self.region_inputs[region_key].setEnabled(False)
 
 class PDFToExcelGUI(QMainWindow):
     def __init__(self):
@@ -832,6 +949,8 @@ class PDFToExcelGUI(QMainWindow):
         self.include_date = False
         self.date_column_name = "Date"
         self.date_value = None
+        self.filter_by_region = False
+        self.region_branch_ids = {}
 
     def setup_ui(self):
         # Top bar with Language and About
@@ -1057,10 +1176,20 @@ class PDFToExcelGUI(QMainWindow):
         self.conversion_thread.province_default = getattr(self, 'province_default', 'QC')
         
         # Add apartment settings
-        self.conversion_thread.extract_apartment = self.extract_apartment
-        self.conversion_thread.apartment_column_name = self.apartment_column_name
-        self.conversion_thread.filter_apartments = self.filter_apartments
-        self.conversion_thread.include_apartment_column = getattr(self, 'include_apartment_column', True)
+        self.conversion_thread.extract_apartment = False  # Set default
+        if hasattr(self, 'extract_apartment'):  # Only override if explicitly set
+            self.conversion_thread.extract_apartment = self.extract_apartment
+        
+        # Only set apartment-related settings if extract_apartment is True
+        if self.conversion_thread.extract_apartment:
+            self.conversion_thread.apartment_column_name = self.apartment_column_name
+            self.conversion_thread.filter_apartments = self.filter_apartments
+            self.conversion_thread.include_apartment_column = getattr(self, 'include_apartment_column', True)
+        else:
+            # Explicitly set all apartment-related settings to False/None when not extracting
+            self.conversion_thread.apartment_column_name = None
+            self.conversion_thread.filter_apartments = False
+            self.conversion_thread.include_apartment_column = False
         
         # Add phone and date settings
         self.conversion_thread.include_phone = self.include_phone
@@ -1069,6 +1198,9 @@ class PDFToExcelGUI(QMainWindow):
         self.conversion_thread.include_date = self.include_date
         self.conversion_thread.date_column_name = self.date_column_name
         self.conversion_thread.date_value = self.date_value
+        
+        self.conversion_thread.filter_by_region = self.filter_by_region
+        self.conversion_thread.region_branch_ids = self.region_branch_ids
         
         self.conversion_thread.progress_update.connect(self.update_progress)
         self.conversion_thread.conversion_complete.connect(self.conversion_finished)
@@ -1112,17 +1244,13 @@ class PDFToExcelGUI(QMainWindow):
             self.default_values,
             self
         )
-        dialog.merge_address_checkbox.setChecked(self.merge_address)
-        dialog.extract_apartment_checkbox.setChecked(self.extract_apartment)
-        dialog.apartment_name_input.setText(self.apartment_column_name)
-        dialog.filter_apartments_checkbox.setChecked(self.filter_apartments)
-        dialog.include_phone_checkbox.setChecked(self.include_phone)
-        dialog.phone_name_input.setText(self.phone_column_name)
-        dialog.phone_default_input.setText(self.phone_default)
-        dialog.include_date_checkbox.setChecked(self.include_date)
-        dialog.date_name_input.setText(self.date_column_name)
-        if self.date_value:
-            dialog.date_picker.setDate(QDate.fromString(self.date_value, 'yyyy-MM-dd'))
+        
+        # Set region filter settings
+        dialog.filter_region_checkbox.setChecked(self.filter_by_region)
+        for region, branch_id in self.region_branch_ids.items():
+            if region in dialog.region_inputs:
+                dialog.region_inputs[region].setText(branch_id)
+                dialog.region_inputs[region].setEnabled(self.filter_by_region)
         
         if dialog.exec_() == QDialog.Accepted:
             settings = dialog.get_settings()
@@ -1131,28 +1259,45 @@ class PDFToExcelGUI(QMainWindow):
             self.column_names = settings['column_names']
             self.default_values = settings['default_values']
             self.merge_address = settings['merge_address']
-            # Store additional address merge settings
             self.merged_address_name = settings['merged_address_name']
             self.address_separator = settings['address_separator']
             self.province_default = settings['province_default']
-            self.extract_apartment = settings['extract_apartment']
-            self.current_preset = dialog.preset_combo.currentText()
-            if self.extract_apartment:
+            
+            # Explicitly set apartment-related settings
+            self.extract_apartment = settings.get('extract_apartment', False)
+            self.apartment_column_name = settings.get('apartment_column_name', 'Apartment')
+            # Only set filter_apartments to True if explicitly set in settings
+            self.filter_apartments = settings.get('filter_apartments', False)
+            self.include_apartment_column = settings.get('include_apartment_column', True)
+            
+            if self.extract_apartment and self.include_apartment_column:
                 self.column_names['Apartment'] = self.apartment_column_name
-            self.filter_apartments = settings['filter_apartments']
-            self.include_apartment_column = settings['include_apartment_column']
+            elif 'Apartment' in self.column_names:
+                del self.column_names['Apartment']
+            
+            self.current_preset = dialog.preset_combo.currentText()
+            
+            # Phone settings
             self.include_phone = settings['include_phone']
             self.phone_column_name = settings['phone_column_name']
             self.phone_default = settings['phone_default']
+            if self.include_phone:
+                self.column_names['Phone'] = self.phone_column_name
+            elif 'Phone' in self.column_names:
+                del self.column_names['Phone']
+            
+            # Date settings
             self.include_date = settings['include_date']
             self.date_column_name = settings['date_column_name']
             self.date_value = settings['date_value']
-            
-            # Update column names if phone/date are enabled
-            if self.include_phone:
-                self.column_names['Phone'] = self.phone_column_name
             if self.include_date:
                 self.column_names['Date'] = self.date_column_name
+            elif 'Date' in self.column_names:
+                del self.column_names['Date']
+            
+            # Region settings
+            self.filter_by_region = settings['filter_by_region']
+            self.region_branch_ids = settings['region_branch_ids']
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
