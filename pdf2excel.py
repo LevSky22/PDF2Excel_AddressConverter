@@ -169,26 +169,30 @@ def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False,
         df['address'] = df['address'].apply(lambda x: re.sub(r'^[a-zA-Z]', '', x).strip())
         df['address'] = df.apply(lambda row: row['address'] if row['address'].strip() else f"{row['municipality_borough']} {row['address']}", axis=1)
         
-        # Create the output DataFrame with the appropriate columns
+        # Initialize output_data dictionary
         output_data = {}
         
         # Add branch ID based on region if filtering is enabled
         if filter_by_region and region_branch_ids:
-            branch_ids = []
-            filtered_indices = []
+            filtered_df = pd.DataFrame()
             
             for idx, row in df.iterrows():
                 region = get_shore_region(row['municipality_borough'])
-                # Handle unknown regions by using the 'flyer_unknown' branch ID if available
+                logging.info(f"City: {row['municipality_borough']} -> Region: {region}")
                 branch_id = region_branch_ids.get(f'flyer_{region}', region_branch_ids.get('flyer_unknown', 'unknown'))
-                branch_ids.append(branch_id)
-                filtered_indices.append(idx)
+                logging.info(f"Branch ID resolved to: {branch_id}")
+                if branch_id != 'unknown':
+                    row_df = pd.DataFrame([row])
+                    row_df['Branch ID'] = branch_id
+                    filtered_df = pd.concat([filtered_df, row_df])
+                else:
+                    logging.warning(f"Unknown region for city: {row['municipality_borough']}")
             
-            # Filter the DataFrame first if region filtering is enabled
-            if filtered_indices:
-                df = df.iloc[filtered_indices]
+            if len(filtered_df) > 0:
+                df = filtered_df
+                output_data['Branch ID'] = df['Branch ID'].tolist()
             else:
-                # No matching regions found, return empty DataFrame
+                logging.error("No valid regions found in the data")
                 return [pd.DataFrame()]
         
         # Handle name fields
@@ -198,10 +202,6 @@ def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False,
             for name_type in ['First Name', 'Last Name']:
                 col_name = column_names[name_type]
                 output_data[col_name] = [default_values.get(col_name, 'À' if name_type == 'First Name' else "l'occupant")] * len(df)
-        
-        # Add Branch ID column if region filtering is enabled
-        if filter_by_region and region_branch_ids and len(df) > 0:
-            output_data['Branch ID'] = [region_branch_ids.get(f'flyer_{get_shore_region(city)}', region_branch_ids.get('flyer_unknown', 'unknown')) for city in df['municipality_borough']]
         
         # Handle address fields
         if merge_address:

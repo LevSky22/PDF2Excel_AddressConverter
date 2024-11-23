@@ -252,26 +252,33 @@ def get_shore_region(city):
     Returns one of: flyer_north_shore, flyer_south_shore, flyer_montreal, flyer_laval, flyer_longueuil, flyer_unknown
     """
     if not city:
-        return 'flyer_unknown'
+        return 'unknown'
     
     city_upper = city.upper().strip()
     
     # Handle accents in lookup
     city_unaccented = unidecode(city_upper)
     
-    # Check both accented and unaccented versions
+    # First check if it's in Longueuil agglomeration
     if city_upper in LONGUEUIL_CITIES or city_unaccented in LONGUEUIL_CITIES:
-        return 'flyer_longueuil'
+        return 'longueuil'
     
+    # Get the region (e.g., MONTEREGIE, LANAUDIERE, etc.)
     city_region = CITY_TO_REGION.get(city_upper) or CITY_TO_REGION.get(city_unaccented)
     if not city_region:
-        return 'flyer_unknown'
+        return 'unknown'
     
-    for shore, regions in SHORE_MAPPING.items():
-        if city_region in regions:
-            return f"flyer_{shore.lower()}"
+    # Map region to shore
+    if city_region == 'MONTEREGIE':
+        return 'south_shore'
+    elif city_region in ['LAURENTIDES', 'LANAUDIERE']:
+        return 'north_shore'
+    elif city_region == 'MONTREAL':
+        return 'montreal'
+    elif city_region == 'LAVAL':
+        return 'laval'
     
-    return 'flyer_unknown'
+    return 'unknown'
 
 # Example usage:
 if __name__ == "__main__":
