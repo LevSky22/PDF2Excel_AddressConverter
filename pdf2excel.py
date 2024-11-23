@@ -195,24 +195,18 @@ def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False,
                 logging.error("No valid regions found in the data")
                 return [pd.DataFrame()]
         
-        # Handle name fields
-        if merge_names:
-            output_data[merged_name] = [default_values.get(merged_name, "À l'occupant")] * len(df)
-        else:
-            for name_type in ['First Name', 'Last Name']:
-                col_name = column_names[name_type]
-                output_data[col_name] = [default_values.get(col_name, 'À' if name_type == 'First Name' else "l'occupant")] * len(df)
-        
-        # Handle address fields
+        # Handle name fields AFTER filtering the DataFrame
         if merge_address:
             merged_addresses = []
             apartments = []
-            has_apartment = []
+            valid_indices = []  # Track which rows to keep
             
-            for _, row in df.iterrows():
+            for idx, row in df.iterrows():
                 if extract_apartment:
                     clean_addr, apt = clean_text(row['address'], extract_apt=True)
-                    has_apartment.append(apt is not None)
+                    # Skip this row if we're filtering apartments and one is found
+                    if filter_apartments and apt is not None:
+                        continue
                     apartments.append(apt)
                 else:
                     clean_addr = clean_text(row['address'])
@@ -225,8 +219,31 @@ def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False,
                 ]
                 merged_address = address_separator.join(filter(None, address_parts))
                 merged_addresses.append(merged_address)
+                valid_indices.append(idx)  # Keep track of valid rows
             
-            # Create DataFrame with all data
+            # Filter the DataFrame to only include valid rows
+            if valid_indices:
+                df = df.loc[valid_indices].copy()
+                # Ensure all arrays match the filtered DataFrame length
+                merged_addresses = merged_addresses[:len(df)]
+                if extract_apartment and include_apartment_column:
+                    apartments = apartments[:len(df)]
+            
+            # Create output data AFTER filtering
+            output_data = {}  # Reset output_data after filtering
+            
+            if filter_by_region and 'Branch ID' in df.columns:
+                output_data['Branch ID'] = df['Branch ID'].tolist()
+            
+            # Add name fields based on filtered DataFrame length
+            if merge_names:
+                output_data[merged_name] = [default_values.get(merged_name, "À l'occupant")] * len(df)
+            else:
+                for name_type in ['First Name', 'Last Name']:
+                    col_name = column_names[name_type]
+                    output_data[col_name] = [default_values.get(col_name, 'À' if name_type == 'First Name' else "l'occupant")] * len(df)
+            
+            # Add address fields
             output_data[merged_address_name] = merged_addresses
             if extract_apartment and include_apartment_column:
                 output_data[apartment_column_name] = apartments
@@ -237,18 +254,31 @@ def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False,
                 cleaned_addresses = []
                 apartments = []
                 has_apartment = []
+                valid_indices = []  # Track which rows to keep
                 
-                for addr in df['address']:
+                for idx, addr in enumerate(df['address']):
                     clean_addr, apt = clean_text(addr, extract_apt=True)
+                    # Skip this row if we're filtering apartments and one is found
+                    if filter_apartments and apt is not None:
+                        continue
                     cleaned_addresses.append(clean_addr)
                     apartments.append(apt)
                     has_apartment.append(apt is not None)
+                    valid_indices.append(idx)
+                
+                # Filter the DataFrame to only include valid rows
+                if valid_indices:
+                    df = df.iloc[valid_indices].copy()
+                    # Ensure all arrays match the filtered DataFrame length
+                    cleaned_addresses = cleaned_addresses[:len(df)]
+                    if include_apartment_column:
+                        apartments = apartments[:len(df)]
                 
                 output_data.update({
                     column_names['Address']: cleaned_addresses,
-                    column_names['City']: df['municipality_borough'],
-                    column_names['Province']: default_values.get(column_names['Province'], ''),
-                    column_names['Postal Code']: df['postal_code']
+                    column_names['City']: df['municipality_borough'].tolist(),
+                    column_names['Province']: [default_values.get(column_names['Province'], '')] * len(df),
+                    column_names['Postal Code']: df['postal_code'].tolist()
                 })
                 
                 if include_apartment_column:
