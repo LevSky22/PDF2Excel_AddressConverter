@@ -262,17 +262,18 @@ def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False,
                     column_names['Postal Code']: df['postal_code']
                 })
         
-        # Create DataFrame with all data
+        # Add phone number if enabled
+        if include_phone:
+            output_data[column_names.get('Phone', 'Phone')] = [phone_default] * len(df)
+        
+        # Add date if enabled
+        if include_date:
+            output_data[column_names.get('Date', 'Date')] = [date_value] * len(df)
+        
+        # Create output DataFrame with all data
         output_df = pd.DataFrame(output_data)
         
-        # Only filter apartments if both extract_apartment and filter_apartments are True
-        if extract_apartment and filter_apartments and 'has_apartment' in locals():
-            logging.info(f"Filtering out addresses with apartments (before: {len(output_df)} rows)")
-            # Create a new DataFrame instead of modifying a view
-            output_df = output_df[~pd.Series(has_apartment)].copy()
-            logging.info(f"After filtering: {len(output_df)} rows")
-        
-        # Determine sort column and handle address cleanup
+        # Sort the DataFrame
         if merge_address:
             sort_column = merged_address_name
         else:
@@ -280,17 +281,13 @@ def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False,
             # Clean up address if city is included
             address_col = column_names['Address']
             city_col = column_names['City']
-            # Create a copy before modifying to avoid SettingWithCopyWarning
-            output_df = output_df.copy()
             output_df[address_col] = output_df.apply(
                 lambda row: row[address_col].replace(row[city_col], '', 1).strip() 
                 if row[address_col].startswith(row[city_col]) else row[address_col], 
                 axis=1
             )
         
-        # Sort the DataFrame
         output_df = output_df.sort_values(by=sort_column).copy()
-        
         logging.info(f"Processed {len(output_df)} rows for {pdf_path}")
         all_dfs.append(output_df)
     
