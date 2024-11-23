@@ -273,12 +273,8 @@ def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False,
         # Create output DataFrame with all data
         output_df = pd.DataFrame(output_data)
         
-        # Sort the DataFrame
-        if merge_address:
-            sort_column = merged_address_name
-        else:
-            sort_column = column_names['City']
-            # Clean up address if city is included
+        # Clean up address if city is included (do this before sorting)
+        if not merge_address:
             address_col = column_names['Address']
             city_col = column_names['City']
             output_df[address_col] = output_df.apply(
@@ -287,7 +283,18 @@ def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False,
                 axis=1
             )
         
-        output_df = output_df.sort_values(by=sort_column).copy()
+        # Sort the DataFrame - only sort once
+        if filter_by_region and 'Branch ID' in output_df.columns:
+            sort_columns = ['Branch ID']
+            if merge_address:
+                sort_columns.append(merged_address_name)
+            else:
+                sort_columns.extend([column_names['City'], column_names['Address']])
+            output_df = output_df.sort_values(sort_columns)
+        else:
+            sort_column = merged_address_name if merge_address else column_names['City']
+            output_df = output_df.sort_values(by=sort_column)
+        
         logging.info(f"Processed {len(output_df)} rows for {pdf_path}")
         all_dfs.append(output_df)
     
@@ -411,13 +418,16 @@ def convert_pdf_to_excel(pdf_files, output_dir, merge_files=False, custom_filena
         if extract_apartment and not include_apartment_column and apartment_column_name in merged_df.columns:
             merged_df = merged_df.drop(columns=[apartment_column_name])
         
-        # Choose the correct sorting column
-        if merge_address:
-            sort_column = merged_address_name
+        # Sort by Branch ID first if region filtering is enabled
+        if filter_by_region and 'Branch ID' in merged_df.columns:
+            if merge_address:
+                merged_df = merged_df.sort_values(['Branch ID', merged_address_name])
+            else:
+                merged_df = merged_df.sort_values(['Branch ID', column_names['City'], column_names['Address']])
         else:
-            sort_column = column_names['City']
-            
-        merged_df = merged_df.sort_values(by=sort_column)
+            # Original sorting logic
+            sort_column = merged_address_name if merge_address else column_names['City']
+            merged_df = merged_df.sort_values(by=sort_column)
         
         if custom_filename:
             output_filename = os.path.join(output_dir, f'{custom_filename}.{file_format}')
@@ -446,13 +456,15 @@ def convert_pdf_to_excel(pdf_files, output_dir, merge_files=False, custom_filena
                 base_name = os.path.splitext(os.path.basename(pdf_paths[i]))[0]
                 output_filename = os.path.join(output_dir, f'{base_name}_{current_time}.{file_format}')
             
-            # Choose the correct sorting column based on merge_address setting
-            if merge_address:
-                sort_column = merged_address_name
+            # Sort by Branch ID first if region filtering is enabled
+            if filter_by_region and 'Branch ID' in df.columns:
+                if merge_address:
+                    df = df.sort_values(['Branch ID', merged_address_name])
+                else:
+                    df = df.sort_values(['Branch ID', column_names['City'], column_names['Address']])
             else:
-                sort_column = column_names['City']
-                
-            df = df.sort_values(by=sort_column)
+                sort_column = merged_address_name if merge_address else column_names['City']
+                df = df.sort_values(by=sort_column)
             
             if file_format == 'xlsx':
                 df.to_excel(output_filename, index=False)
