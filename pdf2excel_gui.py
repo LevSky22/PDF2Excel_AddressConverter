@@ -3,8 +3,9 @@ import os
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QPushButton, QListWidget, QFileDialog, QProgressBar, QLabel,
                              QAbstractItemView, QComboBox, QMessageBox, QInputDialog, QLineEdit,
-                             QCheckBox, QDialog, QFormLayout, QDialogButtonBox, QFrame)  # Add QCheckBox and QFrame to imports
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QUrl
+                             QCheckBox, QDialog, QFormLayout, QDialogButtonBox, QFrame, QDateEdit,
+                             QScrollArea)  # Add QScrollArea
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QUrl, QDate  # Add QDate
 from PyQt5.QtGui import QDragEnterEvent, QDropEvent, QDesktopServices, QPixmap, QPainter, QColor, QFont, QKeyEvent, QIcon
 from pdf2excel import convert_pdf_to_excel, auto_adjust_columns, setup_logging
 import pandas as pd
@@ -71,6 +72,20 @@ translations = {
         'select_format': "Sélectionner le format",
         'excel_format': "Excel (.xlsx)",
         'csv_format': "CSV (.csv)",
+        'merge_address': "Fusionner les champs d'adresse",
+        'merged_address_name': "Nom de la colonne fusionnée",
+        'address_separator': "Séparateur d'adresse",
+        'province_default': "Province par défaut",
+        'extract_apartment': "Extraire les numéros d'appartement",
+        'apartment_column_name': "Nom de la colonne d'appartement",
+        'filter_apartments': "Exclure les adresses avec appartements",
+        'include_apartment_column': "Inclure la colonne d'appartement",
+        'include_phone': "Inclure numéro de téléphone",
+        'phone_column_name': "Nom de la colonne téléphone",
+        'phone_default': "Numéro par défaut",
+        'include_date': "Inclure la date",
+        'date_column_name': "Nom de la colonne date",
+        'date_value': "Sélectionner la date",
     },
     'English': {
         'window_title': "PDF to Excel Converter",
@@ -125,6 +140,20 @@ translations = {
         'select_format': "Select format",
         'excel_format': "Excel (.xlsx)",
         'csv_format': "CSV (.csv)",
+        'merge_address': "Merge Address Fields",
+        'merged_address_name': "Merged Column Name",
+        'address_separator': "Address Separator",
+        'province_default': "Default Province",
+        'extract_apartment': "Extract Apartment Numbers",
+        'apartment_column_name': "Apartment Column Name",
+        'filter_apartments': "Exclude addresses with apartments",
+        'include_apartment_column': "Include Apartment Column",
+        'include_phone': "Include phone number",
+        'phone_column_name': "Phone column name",
+        'phone_default': "Default number",
+        'include_date': "Include date",
+        'date_column_name': "Date column name",
+        'date_value': "Select date",
     }
 }
 
@@ -175,7 +204,21 @@ class ConversionThread(QThread):
         self.merge_names = False
         self.merged_name = None
         self.default_values = None
-        self.file_format = 'xlsx'  # Add default format
+        self.file_format = 'xlsx'
+        self.merge_address = False
+        self.merged_address_name = "Complete Address"
+        self.address_separator = ", "
+        self.province_default = "QC"
+        self.extract_apartment = False
+        self.apartment_column_name = "Apartment"
+        self.filter_apartments = False
+        self.include_apartment_column = True
+        self.include_phone = False
+        self.phone_column_name = "Phone"
+        self.phone_default = ""
+        self.include_date = False
+        self.date_column_name = "Date"
+        self.date_value = None
 
     def run(self):
         try:
@@ -190,7 +233,19 @@ class ConversionThread(QThread):
                 self.merge_names,
                 self.merged_name,
                 self.default_values,
-                self.file_format  # Pass the file format
+                self.file_format,
+                self.merge_address,
+                self.merged_address_name,
+                self.address_separator,
+                self.province_default,
+                self.extract_apartment,
+                self.apartment_column_name,
+                self.filter_apartments,
+                self.include_apartment_column,
+                self.include_phone,
+                self.phone_default,
+                self.include_date,
+                self.date_value
             ):
                 if isinstance(progress, str):
                     output_file = progress
@@ -209,63 +264,23 @@ class ColumnSettingsDialog(QDialog):
         self.setWindowTitle(translations[self.parent.language]['column_settings_title'])
         self.setMinimumWidth(500)
         
-        # Main layout with margins
-        layout = QVBoxLayout()
-        layout.setSpacing(15)  # Increase spacing between sections
-        layout.setContentsMargins(20, 20, 20, 20)  # Add margins around the dialog
+        # Create main layout
+        main_layout = QVBoxLayout(self)
         
-        # Create a group for name merge settings
-        merge_group = QFrame()
-        merge_group.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
-        merge_group_layout = QVBoxLayout(merge_group)
-        merge_group_layout.setSpacing(10)
+        # Create scroll area
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         
-        # Merge checkbox with some styling
-        self.merge_checkbox = QCheckBox(translations[self.parent.language]['merge_names_checkbox'])
-        self.merge_checkbox.setStyleSheet("""
-            QCheckBox {
-                font-weight: bold;
-                padding: 5px;
-            }
-        """)
-        self.merge_checkbox.setChecked(merge_names)
-        self.merge_checkbox.stateChanged.connect(self.on_merge_changed)
-        merge_group_layout.addWidget(self.merge_checkbox)
+        # Create container widget for scroll area
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setSpacing(15)
+        layout.setContentsMargins(20, 20, 20, 20)
         
-        # Merged name settings in a horizontal layout
-        merged_settings = QHBoxLayout()
-        merged_settings.setSpacing(10)
-        
-        # Column name input
-        name_layout = QVBoxLayout()
-        name_label = QLabel(translations[self.parent.language]['merged_column_name'])
-        name_label.setStyleSheet("font-weight: normal;")
-        self.merged_name_input = QLineEdit(merged_name)
-        self.merged_name_input.setEnabled(merge_names)
-        name_layout.addWidget(name_label)
-        name_layout.addWidget(self.merged_name_input)
-        merged_settings.addLayout(name_layout)
-        
-        # Default value input
-        default_layout = QVBoxLayout()
-        default_label = QLabel(translations[self.parent.language]['default_value'])
-        default_label.setStyleSheet("font-weight: normal;")
-        self.merged_default_value = QLineEdit(default_values.get(merged_name, "À l'occupant") if default_values else "À l'occupant")
-        self.merged_default_value.setEnabled(merge_names)
-        default_layout.addWidget(default_label)
-        default_layout.addWidget(self.merged_default_value)
-        merged_settings.addLayout(default_layout)
-        
-        merge_group_layout.addLayout(merged_settings)
-        layout.addWidget(merge_group)
-        
-        # Add separator with margin
-        layout.addSpacing(10)
-        separator = QFrame()
-        separator.setFrameShape(QFrame.HLine)
-        separator.setFrameShadow(QFrame.Sunken)
-        layout.addWidget(separator)
-        layout.addSpacing(10)
+        # Initialize column inputs dictionaries
+        self.column_inputs = {}
+        self.default_inputs = {}
         
         # Store original column structure
         self.original_columns = {
@@ -277,52 +292,200 @@ class ColumnSettingsDialog(QDialog):
             'Postal Code': 'postal_code'
         }
         
-        # Grid layout for column settings
-        grid_layout = QFormLayout()
-        grid_layout.setSpacing(10)
-        self.column_inputs = {}
-        self.default_inputs = {}
+        # Create column input fields
+        column_group = QFrame()
+        column_group.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
+        column_layout = QVBoxLayout(column_group)
         
-        # Use original column keys for iteration
+        # Create input fields for each column
         for original_key in self.original_columns.keys():
-            col_layout = QHBoxLayout()
-            col_layout.setSpacing(10)
+            row_layout = QHBoxLayout()
             
-            # Column name input with label
+            # Column name input
             name_layout = QVBoxLayout()
             name_label = QLabel(translations[self.parent.language]['column_name'])
-            # Get the current custom name if it exists, otherwise use original key
             current_name = current_columns.get(original_key, original_key)
             name_input = QLineEdit(current_name)
-            name_input.setMinimumWidth(150)
             name_layout.addWidget(name_label)
             name_layout.addWidget(name_input)
-            col_layout.addLayout(name_layout)
+            row_layout.addLayout(name_layout)
             self.column_inputs[original_key] = name_input
             
-            # Default value input with label
+            # Default value input
             default_layout = QVBoxLayout()
             default_label = QLabel(translations[self.parent.language]['default_value'])
-            default_input = QLineEdit(default_values.get(current_name, "") if default_values else "")
-            default_input.setMinimumWidth(150)
+            default_input = QLineEdit(default_values.get(current_name, ""))
             default_layout.addWidget(default_label)
             default_layout.addWidget(default_input)
-            col_layout.addLayout(default_layout)
+            row_layout.addLayout(default_layout)
             self.default_inputs[original_key] = default_input
             
-            # Disable First/Last name inputs if merged
-            if original_key in ['First Name', 'Last Name']:
-                name_input.setEnabled(not merge_names)
-                default_input.setEnabled(not merge_names)
-            
-            # Use original key for translation lookup
-            translated_label = translations[self.parent.language][self.original_columns[original_key]]
-            grid_layout.addRow(translated_label, col_layout)
+            # Add row to column layout
+            field_label = QLabel(translations[self.parent.language][self.original_columns[original_key]])
+            field_label.setStyleSheet("font-weight: bold;")
+            column_layout.addWidget(field_label)
+            column_layout.addLayout(row_layout)
+            column_layout.addSpacing(10)
         
-        layout.addLayout(grid_layout)
+        layout.addWidget(column_group)
         
-        # Add buttons with some spacing
-        layout.addSpacing(15)
+        # Add preset controls at the top (outside scroll area)
+        preset_layout = QHBoxLayout()
+        self.preset_combo = QComboBox()
+        self.load_presets()
+        self.preset_combo.currentTextChanged.connect(self.load_preset)
+        preset_layout.addWidget(self.preset_combo)
+        
+        save_preset_btn = QPushButton(translations[self.parent.language]['save_preset'])
+        save_preset_btn.clicked.connect(self.save_preset)
+        preset_layout.addWidget(save_preset_btn)
+        
+        delete_preset_btn = QPushButton(translations[self.parent.language]['delete_preset'])
+        delete_preset_btn.clicked.connect(self.delete_preset)
+        preset_layout.addWidget(delete_preset_btn)
+        
+        main_layout.addLayout(preset_layout)
+        
+        # Add separator after presets
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setFrameShadow(QFrame.Sunken)
+        main_layout.addWidget(separator)
+        
+        # Add name merge settings
+        name_group = QFrame()
+        name_group.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
+        name_group_layout = QVBoxLayout(name_group)
+        
+        self.merge_checkbox = QCheckBox(translations[self.parent.language]['merge_names_checkbox'])
+        self.merge_checkbox.setStyleSheet("QCheckBox { font-weight: bold; padding: 5px; }")
+        self.merge_checkbox.stateChanged.connect(self.on_merge_changed)
+        name_group_layout.addWidget(self.merge_checkbox)
+        
+        merged_settings = QHBoxLayout()
+        self.merged_name_input = QLineEdit(merged_name)
+        self.merged_default_value = QLineEdit(default_values.get(merged_name, "À l'occupant") if default_values else "À l'occupant")
+        merged_settings.addWidget(QLabel(translations[self.parent.language]['merged_column_name']))
+        merged_settings.addWidget(self.merged_name_input)
+        merged_settings.addWidget(QLabel(translations[self.parent.language]['default_value']))
+        merged_settings.addWidget(self.merged_default_value)
+        name_group_layout.addLayout(merged_settings)
+        layout.addWidget(name_group)
+        
+        # Add address merge settings
+        address_group = QFrame()
+        address_group.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
+        address_group_layout = QVBoxLayout(address_group)
+        
+        self.merge_address_checkbox = QCheckBox(translations[self.parent.language]['merge_address'])
+        self.merge_address_checkbox.setStyleSheet("QCheckBox { font-weight: bold; padding: 5px; }")
+        self.merge_address_checkbox.stateChanged.connect(self.on_merge_address_changed)
+        address_group_layout.addWidget(self.merge_address_checkbox)
+        
+        address_settings = QHBoxLayout()
+        self.merged_address_input = QLineEdit("Complete Address")
+        self.address_separator_input = QLineEdit(", ")
+        self.province_default_input = QLineEdit("QC")
+        
+        address_name_layout = QVBoxLayout()
+        address_name_layout.addWidget(QLabel(translations[self.parent.language]['merged_column_name']))
+        address_name_layout.addWidget(self.merged_address_input)
+        address_settings.addLayout(address_name_layout)
+        
+        separator_layout = QVBoxLayout()
+        separator_layout.addWidget(QLabel(translations[self.parent.language]['address_separator']))
+        separator_layout.addWidget(self.address_separator_input)
+        address_settings.addLayout(separator_layout)
+        
+        province_layout = QVBoxLayout()
+        province_layout.addWidget(QLabel(translations[self.parent.language]['province_default']))
+        province_layout.addWidget(self.province_default_input)
+        address_settings.addLayout(province_layout)
+        
+        address_group_layout.addLayout(address_settings)
+        layout.addWidget(address_group)
+        
+        # Add apartment settings
+        apartment_group = QFrame()
+        apartment_group.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
+        apartment_group_layout = QVBoxLayout(apartment_group)
+        
+        self.extract_apartment_checkbox = QCheckBox(translations[self.parent.language]['extract_apartment'])
+        self.extract_apartment_checkbox.setStyleSheet("QCheckBox { font-weight: bold; padding: 5px; }")
+        self.extract_apartment_checkbox.stateChanged.connect(self.on_extract_apartment_changed)
+        apartment_group_layout.addWidget(self.extract_apartment_checkbox)
+        
+        apartment_settings = QVBoxLayout()
+        apartment_name_layout = QHBoxLayout()
+        self.apartment_name_input = QLineEdit("Apartment")
+        apartment_name_layout.addWidget(QLabel(translations[self.parent.language]['apartment_column_name']))
+        apartment_name_layout.addWidget(self.apartment_name_input)
+        apartment_settings.addLayout(apartment_name_layout)
+        
+        self.include_apartment_checkbox = QCheckBox(translations[self.parent.language]['include_apartment_column'])
+        self.filter_apartments_checkbox = QCheckBox(translations[self.parent.language]['filter_apartments'])
+        apartment_settings.addWidget(self.include_apartment_checkbox)
+        apartment_settings.addWidget(self.filter_apartments_checkbox)
+        
+        apartment_group_layout.addLayout(apartment_settings)
+        layout.addWidget(apartment_group)
+        
+        # Add phone settings
+        phone_group = QFrame()
+        phone_group.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
+        phone_group_layout = QVBoxLayout(phone_group)
+        
+        self.include_phone_checkbox = QCheckBox(translations[self.parent.language]['include_phone'])
+        self.include_phone_checkbox.setStyleSheet("QCheckBox { font-weight: bold; padding: 5px; }")
+        self.include_phone_checkbox.stateChanged.connect(self.on_phone_changed)
+        phone_group_layout.addWidget(self.include_phone_checkbox)
+        
+        phone_settings = QHBoxLayout()
+        self.phone_name_input = QLineEdit("Phone")
+        self.phone_default_input = QLineEdit("")
+        phone_settings.addWidget(QLabel(translations[self.parent.language]['phone_column_name']))
+        phone_settings.addWidget(self.phone_name_input)
+        phone_settings.addWidget(QLabel(translations[self.parent.language]['phone_default']))
+        phone_settings.addWidget(self.phone_default_input)
+        phone_group_layout.addLayout(phone_settings)
+        layout.addWidget(phone_group)
+        
+        # Add date settings
+        date_group = QFrame()
+        date_group.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
+        date_group_layout = QVBoxLayout(date_group)
+        
+        self.include_date_checkbox = QCheckBox(translations[self.parent.language]['include_date'])
+        self.include_date_checkbox.setStyleSheet("QCheckBox { font-weight: bold; padding: 5px; }")
+        self.include_date_checkbox.stateChanged.connect(self.on_date_changed)
+        date_group_layout.addWidget(self.include_date_checkbox)
+        
+        date_settings = QHBoxLayout()
+        self.date_name_input = QLineEdit("Date")
+        self.date_picker = QDateEdit()
+        self.date_picker.setCalendarPopup(True)
+        self.date_picker.setDate(QDate.currentDate())
+        date_settings.addWidget(QLabel(translations[self.parent.language]['date_column_name']))
+        date_settings.addWidget(self.date_name_input)
+        date_settings.addWidget(QLabel(translations[self.parent.language]['date_value']))
+        date_settings.addWidget(self.date_picker)
+        date_group_layout.addLayout(date_settings)
+        layout.addWidget(date_group)
+        
+        # Set initial states
+        self.on_merge_changed(merge_names)
+        self.on_merge_address_changed(False)
+        self.on_extract_apartment_changed(False)
+        self.on_phone_changed(False)
+        self.on_date_changed(False)
+        
+        # Set the container as the scroll area widget
+        scroll.setWidget(container)
+        
+        # Add scroll area to main layout
+        main_layout.addWidget(scroll)
+        
+        # Add buttons at the bottom (outside scroll area)
         buttons = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel,
             Qt.Horizontal, self)
@@ -334,76 +497,13 @@ class ColumnSettingsDialog(QDialog):
                 padding: 5px;
             }
         """)
-        layout.addWidget(buttons)
+        main_layout.addWidget(buttons)
         
-        # Add preset controls at the top
-        preset_layout = QHBoxLayout()
-        
-        # Preset selector
-        self.preset_combo = QComboBox()
-        self.load_presets()  # Load available presets
-        self.preset_combo.currentTextChanged.connect(self.load_preset)
-        preset_layout.addWidget(self.preset_combo)
-        
-        # Save preset button
-        save_preset_btn = QPushButton(translations[self.parent.language]['save_preset'])
-        save_preset_btn.clicked.connect(self.save_preset)
-        preset_layout.addWidget(save_preset_btn)
-        
-        # Delete preset button
-        delete_preset_btn = QPushButton(translations[self.parent.language]['delete_preset'])
-        delete_preset_btn.clicked.connect(self.delete_preset)
-        preset_layout.addWidget(delete_preset_btn)
-        
-        layout.insertLayout(0, preset_layout)  # Add at the top of the dialog
-        
-        # Add separator after presets
-        separator = QFrame()
-        separator.setFrameShape(QFrame.HLine)
-        separator.setFrameShadow(QFrame.Sunken)
-        layout.insertWidget(1, separator)
-
-        self.setLayout(layout)
-
-        self.initial_load = True  # Add this flag
-
-    def on_merge_changed(self, state):
-        is_merged = state == Qt.Checked
-        self.merged_name_input.setEnabled(is_merged)
-        self.merged_default_value.setEnabled(is_merged)
-        
-        # Toggle First/Last name inputs
-        for key in ['First Name', 'Last Name']:
-            if key in self.column_inputs:
-                self.column_inputs[key].setEnabled(not is_merged)
-                self.default_inputs[key].setEnabled(not is_merged)
-
-    def get_settings(self):
-        merge_names = self.merge_checkbox.isChecked()
-        merged_name = self.merged_name_input.text() if merge_names else None
-        
-        column_names = {}
-        default_values = {}
-        
-        if merge_names:
-            column_names[merged_name] = merged_name
-            default_values[merged_name] = self.merged_default_value.text()
-        
-        # Add other columns using original keys
-        for original_key in self.original_columns.keys():
-            if original_key not in ['First Name', 'Last Name'] or not merge_names:
-                column_name = self.column_inputs[original_key].text()
-                column_names[original_key] = column_name
-                default_values[column_name] = self.default_inputs[original_key].text()
-        
-        return {
-            'merge_names': merge_names,
-            'merged_name': merged_name,
-            'column_names': column_names,
-            'default_values': default_values
-        }
+        # Set size of dialog
+        self.resize(600, 800)  # Adjust these values as needed
 
     def load_presets(self):
+        """Load available presets from file"""
         self.preset_combo.clear()
         self.preset_combo.addItem("")  # Empty option
         try:
@@ -414,7 +514,56 @@ class ColumnSettingsDialog(QDialog):
         except FileNotFoundError:
             pass
 
+    def load_preset(self, preset_name):
+        """Load a specific preset"""
+        if not preset_name:
+            return
+            
+        try:
+            with open('column_presets.json', 'r', encoding='utf-8') as f:
+                presets = json.load(f)
+                if preset_name in presets:
+                    settings = presets[preset_name]
+                    
+                    # Load all settings from the preset
+                    self.merge_checkbox.setChecked(settings.get('merge_names', False))
+                    self.merged_name_input.setText(settings.get('merged_name', 'Full Name'))
+                    self.merged_default_value.setText(settings.get('merged_default', "À l'occupant"))
+                    
+                    # Load address merge settings
+                    self.merge_address_checkbox.setChecked(settings.get('merge_address', False))
+                    self.merged_address_input.setText(settings.get('merged_address_name', 'Complete Address'))
+                    self.address_separator_input.setText(settings.get('address_separator', ', '))
+                    self.province_default_input.setText(settings.get('province_default', 'QC'))
+                    
+                    # Load apartment settings
+                    self.extract_apartment_checkbox.setChecked(settings.get('extract_apartment', False))
+                    self.apartment_name_input.setText(settings.get('apartment_column_name', 'Apartment'))
+                    self.filter_apartments_checkbox.setChecked(settings.get('filter_apartments', False))
+                    self.include_apartment_checkbox.setChecked(settings.get('include_apartment_column', True))
+                    
+                    # Load phone settings
+                    self.include_phone_checkbox.setChecked(settings.get('include_phone', False))
+                    self.phone_name_input.setText(settings.get('phone_column_name', 'Phone'))
+                    self.phone_default_input.setText(settings.get('phone_default', ''))
+                    
+                    # Load date settings
+                    self.include_date_checkbox.setChecked(settings.get('include_date', False))
+                    self.date_name_input.setText(settings.get('date_column_name', 'Date'))
+                    if settings.get('date_value'):
+                        self.date_picker.setDate(QDate.fromString(settings['date_value'], 'yyyy-MM-dd'))
+                    
+                    # Update enabled states
+                    self.on_merge_changed(settings.get('merge_names', False))
+                    self.on_merge_address_changed(settings.get('merge_address', False))
+                    self.on_extract_apartment_changed(settings.get('extract_apartment', False))
+                    self.on_phone_changed(settings.get('include_phone', False))
+                    self.on_date_changed(settings.get('include_date', False))
+        except FileNotFoundError:
+            pass
+
     def save_preset(self):
+        """Save current settings as a preset"""
         name, ok = QInputDialog.getText(
             self,
             translations[self.parent.language]['preset_name'],
@@ -422,18 +571,7 @@ class ColumnSettingsDialog(QDialog):
         )
         
         if ok and name:
-            settings = {
-                'merge_names': self.merge_checkbox.isChecked(),
-                'merged_name': self.merged_name_input.text(),
-                'merged_default': self.merged_default_value.text(),
-                'columns': {
-                    key: {
-                        'name': self.column_inputs[key].text(),
-                        'default': self.default_inputs[key].text()
-                    }
-                    for key in self.column_inputs
-                }
-            }
+            settings = self.get_settings()
             
             try:
                 with open('column_presets.json', 'r', encoding='utf-8') as f:
@@ -450,49 +588,8 @@ class ColumnSettingsDialog(QDialog):
             self.preset_combo.setCurrentText(name)
             QMessageBox.information(self, "", translations[self.parent.language]['preset_saved'])
 
-    def load_preset(self, preset_name):
-        if not preset_name:
-            # Reset to default values
-            self.merge_checkbox.setChecked(False)
-            self.merged_name_input.setText("Full Name")
-            self.merged_default_value.setText("À l'occupant")
-            
-            # Reset column names and defaults to original values
-            default_columns = {
-                'First Name': ('First Name', 'À'),
-                'Last Name': ('Last Name', "l'occupant"),
-                'Address': ('Address', ''),
-                'City': ('City', ''),
-                'Province': ('Province', ''),
-                'Postal Code': ('Postal Code', '')
-            }
-            
-            for key, (name, default) in default_columns.items():
-                if key in self.column_inputs:
-                    self.column_inputs[key].setText(name)
-                    self.default_inputs[key].setText(default)
-            return
-            
-        try:
-            with open('column_presets.json', 'r', encoding='utf-8') as f:
-                presets = json.load(f)
-                if preset_name in presets:
-                    settings = presets[preset_name]
-                    
-                    # Apply merge settings
-                    self.merge_checkbox.setChecked(settings['merge_names'])
-                    self.merged_name_input.setText(settings['merged_name'])
-                    self.merged_default_value.setText(settings['merged_default'])
-                    
-                    # Apply column settings
-                    for key, values in settings['columns'].items():
-                        if key in self.column_inputs:
-                            self.column_inputs[key].setText(values['name'])
-                            self.default_inputs[key].setText(values['default'])
-        except FileNotFoundError:
-            pass
-
     def delete_preset(self):
+        """Delete the selected preset"""
         preset_name = self.preset_combo.currentText()
         if not preset_name:
             return
@@ -520,6 +617,92 @@ class ColumnSettingsDialog(QDialog):
                     self.preset_combo.setCurrentText("")
             except FileNotFoundError:
                 pass
+
+    def on_merge_changed(self, state):
+        is_checked = state == Qt.Checked
+        self.merged_name_input.setEnabled(is_checked)
+        self.merged_default_value.setEnabled(is_checked)
+        
+        # Toggle First/Last name inputs
+        for key in ['First Name', 'Last Name']:
+            if key in self.column_inputs:
+                self.column_inputs[key].setEnabled(not is_checked)
+                self.default_inputs[key].setEnabled(not is_checked)
+
+    def on_merge_address_changed(self, state):
+        is_checked = state == Qt.Checked
+        # Enable/disable merged address settings
+        self.merged_address_input.setEnabled(is_checked)
+        self.address_separator_input.setEnabled(is_checked)
+        self.province_default_input.setEnabled(is_checked)
+        
+        # Disable individual address field inputs when merged
+        address_fields = ['Address', 'City', 'Province', 'Postal Code']
+        for field in address_fields:
+            if field in self.column_inputs:
+                self.column_inputs[field].setEnabled(not is_checked)
+                self.default_inputs[field].setEnabled(not is_checked)
+
+    def on_extract_apartment_changed(self, state):
+        is_checked = state == Qt.Checked
+        self.apartment_name_input.setEnabled(is_checked)
+        self.include_apartment_checkbox.setEnabled(is_checked)
+        self.filter_apartments_checkbox.setEnabled(is_checked)
+
+    def on_phone_changed(self, state):
+        is_checked = state == Qt.Checked
+        self.phone_name_input.setEnabled(is_checked)
+        self.phone_default_input.setEnabled(is_checked)
+
+    def on_date_changed(self, state):
+        is_checked = state == Qt.Checked
+        self.date_name_input.setEnabled(is_checked)
+        self.date_picker.setEnabled(is_checked)
+
+    def get_settings(self):
+        settings = {
+            'merge_names': self.merge_checkbox.isChecked(),
+            'merged_name': self.merged_name_input.text() if self.merge_checkbox.isChecked() else None,
+            'column_names': {},
+            'default_values': {},
+            'merge_address': self.merge_address_checkbox.isChecked(),
+            'merged_address_name': self.merged_address_input.text(),
+            'address_separator': self.address_separator_input.text(),
+            'province_default': self.province_default_input.text(),
+            'extract_apartment': self.extract_apartment_checkbox.isChecked(),
+            'apartment_column_name': self.apartment_name_input.text(),
+            'filter_apartments': self.filter_apartments_checkbox.isChecked(),
+            'include_apartment_column': self.include_apartment_checkbox.isChecked(),
+            'include_phone': self.include_phone_checkbox.isChecked(),
+            'phone_column_name': self.phone_name_input.text(),
+            'phone_default': self.phone_default_input.text(),
+            'include_date': self.include_date_checkbox.isChecked(),
+            'date_column_name': self.date_name_input.text(),
+            'date_value': self.date_picker.date().toString('yyyy-MM-dd') if self.include_date_checkbox.isChecked() else None
+        }
+        
+        # Handle name fields
+        if settings['merge_names']:
+            settings['column_names'][settings['merged_name']] = settings['merged_name']
+            settings['default_values'][settings['merged_name']] = self.merged_default_value.text()
+        else:
+            # Add First/Last name columns
+            for key in ['First Name', 'Last Name']:
+                column_name = self.column_inputs[key].text()
+                settings['column_names'][key] = column_name
+                settings['default_values'][column_name] = self.default_inputs[key].text()
+        
+        if settings['merge_address']:
+            # When merging addresses, only set the Address column name to the merged name
+            settings['column_names']['Address'] = settings['merged_address_name']
+        else:
+            # When not merging addresses, add all address-related columns
+            for key in ['Address', 'City', 'Province', 'Postal Code']:
+                column_name = self.column_inputs[key].text()
+                settings['column_names'][key] = column_name
+                settings['default_values'][column_name] = self.default_inputs[key].text()
+        
+        return settings
 
 class PDFToExcelGUI(QMainWindow):
     def __init__(self):
@@ -570,6 +753,16 @@ class PDFToExcelGUI(QMainWindow):
         self.setup_ui()
 
         self.last_output_file = None  # Add this line to store the last output file path
+        self.merge_address = False  # Add new property
+        self.extract_apartment = False
+        self.apartment_column_name = "Apartment"
+        self.filter_apartments = False
+        self.include_phone = False
+        self.phone_column_name = "Phone"
+        self.phone_default = ""
+        self.include_date = False
+        self.date_column_name = "Date"
+        self.date_value = None
 
     def setup_ui(self):
         # Top bar with Language and About
@@ -786,7 +979,27 @@ class PDFToExcelGUI(QMainWindow):
         self.conversion_thread.merge_names = self.merge_names
         self.conversion_thread.merged_name = self.merged_name
         self.conversion_thread.default_values = self.default_values
-        self.conversion_thread.file_format = file_format  # Add file format
+        self.conversion_thread.file_format = file_format
+        
+        # Add all address merge settings
+        self.conversion_thread.merge_address = self.merge_address
+        self.conversion_thread.merged_address_name = self.column_names.get('Address', 'Complete Address')
+        self.conversion_thread.address_separator = getattr(self, 'address_separator', ', ')
+        self.conversion_thread.province_default = getattr(self, 'province_default', 'QC')
+        
+        # Add apartment settings
+        self.conversion_thread.extract_apartment = self.extract_apartment
+        self.conversion_thread.apartment_column_name = self.apartment_column_name
+        self.conversion_thread.filter_apartments = self.filter_apartments
+        self.conversion_thread.include_apartment_column = getattr(self, 'include_apartment_column', True)
+        
+        # Add phone and date settings
+        self.conversion_thread.include_phone = self.include_phone
+        self.conversion_thread.phone_column_name = self.phone_column_name
+        self.conversion_thread.phone_default = self.phone_default
+        self.conversion_thread.include_date = self.include_date
+        self.conversion_thread.date_column_name = self.date_column_name
+        self.conversion_thread.date_value = self.date_value
         
         self.conversion_thread.progress_update.connect(self.update_progress)
         self.conversion_thread.conversion_complete.connect(self.conversion_finished)
@@ -830,18 +1043,47 @@ class PDFToExcelGUI(QMainWindow):
             self.default_values,
             self
         )
-        # Set the current preset in the combo box
-        if hasattr(self, 'current_preset'):
-            dialog.preset_combo.setCurrentText(self.current_preset)
-            
+        dialog.merge_address_checkbox.setChecked(self.merge_address)
+        dialog.extract_apartment_checkbox.setChecked(self.extract_apartment)
+        dialog.apartment_name_input.setText(self.apartment_column_name)
+        dialog.filter_apartments_checkbox.setChecked(self.filter_apartments)
+        dialog.include_phone_checkbox.setChecked(self.include_phone)
+        dialog.phone_name_input.setText(self.phone_column_name)
+        dialog.phone_default_input.setText(self.phone_default)
+        dialog.include_date_checkbox.setChecked(self.include_date)
+        dialog.date_name_input.setText(self.date_column_name)
+        if self.date_value:
+            dialog.date_picker.setDate(QDate.fromString(self.date_value, 'yyyy-MM-dd'))
+        
         if dialog.exec_() == QDialog.Accepted:
             settings = dialog.get_settings()
             self.merge_names = settings['merge_names']
             self.merged_name = settings['merged_name']
             self.column_names = settings['column_names']
             self.default_values = settings['default_values']
-            # Store the selected preset name
+            self.merge_address = settings['merge_address']
+            # Store additional address merge settings
+            self.merged_address_name = settings['merged_address_name']
+            self.address_separator = settings['address_separator']
+            self.province_default = settings['province_default']
+            self.extract_apartment = settings['extract_apartment']
             self.current_preset = dialog.preset_combo.currentText()
+            if self.extract_apartment:
+                self.column_names['Apartment'] = self.apartment_column_name
+            self.filter_apartments = settings['filter_apartments']
+            self.include_apartment_column = settings['include_apartment_column']
+            self.include_phone = settings['include_phone']
+            self.phone_column_name = settings['phone_column_name']
+            self.phone_default = settings['phone_default']
+            self.include_date = settings['include_date']
+            self.date_column_name = settings['date_column_name']
+            self.date_value = settings['date_value']
+            
+            # Update column names if phone/date are enabled
+            if self.include_phone:
+                self.column_names['Phone'] = self.phone_column_name
+            if self.include_date:
+                self.column_names['Date'] = self.date_column_name
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
