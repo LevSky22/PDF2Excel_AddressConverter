@@ -239,9 +239,8 @@ def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False,
             if merge_names:
                 output_data[merged_name] = [default_values.get(merged_name, "À l'occupant")] * len(df)
             else:
-                for name_type in ['First Name', 'Last Name']:
-                    col_name = column_names[name_type]
-                    output_data[col_name] = [default_values.get(col_name, 'À' if name_type == 'First Name' else "l'occupant")] * len(df)
+                output_data[column_names['First Name']] = [default_values.get(column_names['First Name'], 'À')] * len(df)
+                output_data[column_names['Last Name']] = [default_values.get(column_names['Last Name'], "l'occupant")] * len(df)
             
             # Add address fields
             output_data[merged_address_name] = merged_addresses
@@ -335,14 +334,14 @@ def save_to_excel(dfs, pdf_paths, merge=False):
     
     if merge:
         output_filename = f'output_excel/merged_output_{current_time}.xlsx'
-        dfs.sort_values('City', inplace=True)  # Sort by City column
+        dfs.sort_values('City', inplace=True)
         dfs.to_excel(output_filename, index=False)
         auto_adjust_columns(output_filename)
         print(f"Merged Excel file '{output_filename}' has been created successfully.")
     else:
         for df, pdf_path in zip(dfs, pdf_paths):
             output_filename = f'output_excel/{os.path.splitext(os.path.basename(pdf_path))[0]}_{current_time}.xlsx'
-            df.sort_values('City', inplace=True)  # Sort by City column
+            df.sort_values('City', inplace=True)
             df.to_excel(output_filename, index=False)
             auto_adjust_columns(output_filename)
             print(f"Excel file '{output_filename}' has been created successfully.")

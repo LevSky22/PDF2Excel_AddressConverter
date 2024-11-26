@@ -689,6 +689,7 @@ class ColumnSettingsDialog(QDialog):
             
             presets[name] = settings
             
+            # Save with proper UTF-8 encoding and ensure_ascii=False
             with open('column_presets.json', 'w', encoding='utf-8') as f:
                 json.dump(presets, f, ensure_ascii=False, indent=2)
             
@@ -795,31 +796,46 @@ class ColumnSettingsDialog(QDialog):
 
     def get_settings(self):
         """Get all settings from the dialog"""
+        # Get the merged name default value first
+        merged_default = self.merged_default_value.text().strip()
+        
         settings = {
             'merge_names': self.merge_checkbox.isChecked(),
-            'merged_name': self.merged_name_input.text(),
+            'merged_name': self.merged_name_input.text().strip(),
+            'merged_default': merged_default,  # Store this separately
             'column_names': {
-                key: self.column_inputs[key].text() 
+                key: self.column_inputs[key].text().strip() 
                 for key in self.original_columns.keys()
             },
-            'default_values': {
-                self.column_inputs[key].text(): self.default_inputs[key].text() 
-                for key in self.original_columns.keys()
-            },
+            'default_values': {}
+        }
+        
+        # Handle default values based on merge state
+        if settings['merge_names']:
+            settings['default_values'][settings['merged_name']] = merged_default
+        else:
+            # Store individual field defaults
+            for key in self.original_columns.keys():
+                col_name = self.column_inputs[key].text().strip()
+                default_val = self.default_inputs[key].text().strip()
+                if default_val:  # Only store non-empty defaults
+                    settings['default_values'][col_name] = default_val
+        
+        # Add other settings...
+        settings.update({
             'merge_address': self.merge_address_checkbox.isChecked(),
-            'merged_address_name': self.merged_address_input.text(),
+            'merged_address_name': self.merged_address_input.text().strip(),
             'address_separator': self.address_separator_input.text(),
-            'province_default': self.province_default_input.text(),
-            # Explicitly set extract_apartment to False if unchecked
+            'province_default': self.province_default_input.text().strip(),
             'extract_apartment': self.extract_apartment_checkbox.isChecked(),
-            'apartment_column_name': self.apartment_name_input.text() if self.extract_apartment_checkbox.isChecked() else None,
-            'filter_apartments': self.filter_apartments_checkbox.isChecked() if self.extract_apartment_checkbox.isChecked() else False,
-            'include_apartment_column': self.include_apartment_checkbox.isChecked() if self.extract_apartment_checkbox.isChecked() else False,
+            'apartment_column_name': self.apartment_name_input.text().strip(),
+            'filter_apartments': self.filter_apartments_checkbox.isChecked(),
+            'include_apartment_column': self.include_apartment_checkbox.isChecked(),
             'include_phone': self.include_phone_checkbox.isChecked(),
-            'phone_column_name': self.phone_name_input.text(),
+            'phone_column_name': self.phone_name_input.text().strip(),
             'phone_default': self.phone_default_input.text(),
             'include_date': self.include_date_checkbox.isChecked(),
-            'date_column_name': self.date_name_input.text(),
+            'date_column_name': self.date_name_input.text().strip(),
             'date_value': self.date_picker.date().toString('yyyy-MM-dd') if self.include_date_checkbox.isChecked() else None,
             'filter_by_region': self.filter_region_checkbox.isChecked(),
             'region_branch_ids': {
@@ -827,11 +843,7 @@ class ColumnSettingsDialog(QDialog):
                 for region, input_field in self.region_inputs.items()
                 if self.filter_region_checkbox.isChecked()
             }
-        }
-        
-        # Add merged name default value if merge names is checked
-        if settings['merge_names']:
-            settings['default_values'][settings['merged_name']] = self.merged_default_value.text()
+        })
         
         return settings
 
@@ -1166,7 +1178,15 @@ class PDFToExcelGUI(QMainWindow):
         self.conversion_thread.column_names = self.column_names
         self.conversion_thread.merge_names = self.merge_names
         self.conversion_thread.merged_name = self.merged_name
-        self.conversion_thread.default_values = self.default_values
+        if self.merge_names:
+            self.conversion_thread.default_values = {
+                self.merged_name: self.default_values.get(self.merged_name, "À l'occupant")
+            }
+        else:
+            self.conversion_thread.default_values = {
+                k: v for k, v in self.default_values.items() 
+                if k in self.column_names.values()
+            }
         self.conversion_thread.file_format = file_format
         
         # Add all address merge settings
@@ -1257,7 +1277,19 @@ class PDFToExcelGUI(QMainWindow):
             self.merge_names = settings['merge_names']
             self.merged_name = settings['merged_name']
             self.column_names = settings['column_names']
-            self.default_values = settings['default_values']
+            
+            # Fix default values handling
+            if self.merge_names:
+                # When merging names, ensure we store the default value for the merged column
+                self.default_values = {
+                    self.merged_name: settings['default_values'].get(self.merged_name, "À l'occupant")
+                }
+            else:
+                # When using separate fields, store defaults for First/Last name
+                self.default_values = {
+                    self.column_names['First Name']: settings['default_values'].get(self.column_names['First Name'], 'À'),
+                    self.column_names['Last Name']: settings['default_values'].get(self.column_names['Last Name'], "l'occupant")
+                }
             self.merge_address = settings['merge_address']
             self.merged_address_name = settings['merged_address_name']
             self.address_separator = settings['address_separator']
