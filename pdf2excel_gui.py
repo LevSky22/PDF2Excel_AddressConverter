@@ -16,7 +16,7 @@ import json
 import ctypes
 from quebec_regions_mapping import get_shore_region
 
-VERSION = "1.1"
+VERSION = "1.5"
 
 # Translations dictionary
 translations = {
@@ -243,17 +243,34 @@ class ConversionThread(QThread):
 
     def run(self):
         try:
+            # Initialize logging if enabled
+            if self.enable_logging:
+                # Reset any existing handlers
+                logging.getLogger().handlers = []
+                logging.disable(logging.NOTSET)  # Enable logging
+                self.log_file = setup_logging()  # Create new log file
+                logging.info("Starting PDF conversion process")
+                logging.info(f"Processing files: {self.pdf_files}")
+                logging.info(f"Output directory: {self.output_dir}")
+                logging.info(f"Merge files: {self.merge_files}")
+                logging.info(f"Custom filename: {self.custom_filename}")
+
             output_file = None
             # Only apply apartment filtering if explicitly set to True
             should_filter = (self.extract_apartment and 
                             hasattr(self, 'filter_apartments') and 
                             self.filter_apartments is True)
-            
+
+            if self.enable_logging:
+                logging.info(f"Settings: extract_apartment={self.extract_apartment}, "
+                            f"filter_apartments={should_filter}, "
+                            f"merge_address={self.merge_address}")
+
             for progress in convert_pdf_to_excel(
                 self.pdf_files, 
-                self.output_dir, 
-                self.merge_files, 
-                self.custom_filename, 
+                self.output_dir,
+                self.merge_files,
+                self.custom_filename,
                 self.enable_logging,
                 self.column_names,
                 self.merge_names,
@@ -277,12 +294,21 @@ class ConversionThread(QThread):
             ):
                 if isinstance(progress, str):
                     output_file = progress
+                    if self.enable_logging:
+                        logging.info(f"Created output file: {output_file}")
                 else:
                     self.progress_update.emit(progress)
-            
+                    if self.enable_logging:
+                        logging.info(f"Progress: {progress}%")
+
             time.sleep(2)
+            if self.enable_logging:
+                logging.info("Conversion completed successfully")
             self.conversion_complete.emit(output_file)
+
         except Exception as e:
+            if self.enable_logging:
+                logging.error(f"Error during conversion: {str(e)}", exc_info=True)
             self.error_occurred.emit(str(e))
 
 class ColumnSettingsDialog(QDialog):
@@ -579,7 +605,6 @@ class ColumnSettingsDialog(QDialog):
     def load_preset(self, preset_name):
         """Load a specific preset"""
         if not preset_name:
-            # Reset to default values when no preset is selected
             self.reset_to_defaults()
             return
         
@@ -929,6 +954,12 @@ class PDFToExcelGUI(QMainWindow):
         
         self.language = 'Français'
         self.enable_logging = False
+        self.log_file = None  # Add this line to store log file path
+        
+        # Initialize logging in disabled state
+        logging.getLogger().handlers = []
+        logging.disable(logging.CRITICAL)
+        
         self.merge_names = False
         self.merged_name = "Full Name"
         self.column_names = {
@@ -955,6 +986,7 @@ class PDFToExcelGUI(QMainWindow):
         self.extract_apartment = False
         self.apartment_column_name = "Apartment"
         self.filter_apartments = False
+        self.include_apartment_column = True
         self.include_phone = False
         self.phone_column_name = "Phone"
         self.phone_default = ""
@@ -1045,22 +1077,47 @@ class PDFToExcelGUI(QMainWindow):
             QApplication.processEvents()
 
     def show_about(self):
-        about_box = QMessageBox(self)
-        about_box.setWindowTitle(translations[self.language]['about_title'])
-        about_box.setText(f"{translations[self.language]['about_text']}\n\nVersion: {VERSION}")
-        about_box.setInformativeText('<a href="https://github.com/LevSky22/PDF2Excel_AddressConverter">https://github.com/LevSky22/PDF2Excel_AddressConverter</a>')
-        about_box.setTextFormat(Qt.RichText)
-        about_box.setTextInteractionFlags(Qt.TextBrowserInteraction)
-
-        # Add logging checkbox to the about box
+        # Create custom dialog
+        about_dialog = QDialog(self)
+        about_dialog.setWindowTitle(translations[self.language]['about_title'])
+        layout = QVBoxLayout()
+        
+        # Add text labels
+        text_label = QLabel(f"{translations[self.language]['about_text']}\n\nVersion: {VERSION}")
+        layout.addWidget(text_label)
+        
+        # Add link
+        link_label = QLabel('<a href="https://github.com/LevSky22/PDF2Excel_AddressConverter">https://github.com/LevSky22/PDF2Excel_AddressConverter</a>')
+        link_label.setOpenExternalLinks(True)
+        layout.addWidget(link_label)
+        
+        # Add checkbox
         logging_checkbox = QCheckBox(translations[self.language]['enable_logging'])
         logging_checkbox.setChecked(self.enable_logging)
-        about_box.setCheckBox(logging_checkbox)
-
-        about_box.exec_()
-
-        # Update the logging state based on the checkbox
-        self.enable_logging = logging_checkbox.isChecked()
+        layout.addWidget(logging_checkbox)
+        
+        # Add OK button
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok)
+        button_box.accepted.connect(about_dialog.accept)
+        layout.addWidget(button_box)
+        
+        about_dialog.setLayout(layout)
+        
+        if about_dialog.exec_() == QDialog.Accepted:
+            try:
+                new_logging_state = bool(logging_checkbox.isChecked())
+                if new_logging_state != self.enable_logging:
+                    self.enable_logging = new_logging_state
+                    if self.enable_logging:
+                        # Just set the flag, don't create log file yet
+                        logging.disable(logging.NOTSET)
+                    else:
+                        # Disable logging when unchecked
+                        if logging.getLogger().handlers:
+                            logging.getLogger().handlers = []
+                        logging.disable(logging.CRITICAL)
+            except Exception as e:
+                QMessageBox.warning(self, "Warning", f"Error setting logging state: {str(e)}")
 
     def add_files(self):
         files, _ = QFileDialog.getOpenFileNames(self, translations[self.language]['select_pdf_files'], "", "PDF Files (*.pdf)")
@@ -1195,21 +1252,12 @@ class PDFToExcelGUI(QMainWindow):
         self.conversion_thread.address_separator = getattr(self, 'address_separator', ', ')
         self.conversion_thread.province_default = getattr(self, 'province_default', 'QC')
         
-        # Add apartment settings
-        self.conversion_thread.extract_apartment = False  # Set default
-        if hasattr(self, 'extract_apartment'):  # Only override if explicitly set
-            self.conversion_thread.extract_apartment = self.extract_apartment
-        
-        # Only set apartment-related settings if extract_apartment is True
-        if self.conversion_thread.extract_apartment:
-            self.conversion_thread.apartment_column_name = self.apartment_column_name
-            self.conversion_thread.filter_apartments = self.filter_apartments
-            self.conversion_thread.include_apartment_column = getattr(self, 'include_apartment_column', True)
-        else:
-            # Explicitly set all apartment-related settings to False/None when not extracting
-            self.conversion_thread.apartment_column_name = None
-            self.conversion_thread.filter_apartments = False
-            self.conversion_thread.include_apartment_column = False
+        # Fix apartment filtering settings
+        self.conversion_thread.extract_apartment = self.extract_apartment
+        self.conversion_thread.apartment_column_name = self.apartment_column_name
+        # Explicitly set filter_apartments from the instance variable
+        self.conversion_thread.filter_apartments = self.filter_apartments
+        self.conversion_thread.include_apartment_column = self.include_apartment_column
         
         # Add phone and date settings
         self.conversion_thread.include_phone = self.include_phone
@@ -1265,12 +1313,15 @@ class PDFToExcelGUI(QMainWindow):
             self
         )
         
-        # Set region filter settings
-        dialog.filter_region_checkbox.setChecked(self.filter_by_region)
-        for region, branch_id in self.region_branch_ids.items():
-            if region in dialog.region_inputs:
-                dialog.region_inputs[region].setText(branch_id)
-                dialog.region_inputs[region].setEnabled(self.filter_by_region)
+        # Set current settings explicitly
+        dialog.extract_apartment_checkbox.setChecked(self.extract_apartment)
+        dialog.filter_apartments_checkbox.setChecked(self.filter_apartments)
+        dialog.include_apartment_checkbox.setChecked(self.include_apartment_column)
+        dialog.merge_address_checkbox.setChecked(self.merge_address)
+        
+        # Force update handlers
+        dialog.on_extract_apartment_changed(self.extract_apartment)
+        dialog.on_merge_address_changed(self.merge_address)
         
         if dialog.exec_() == QDialog.Accepted:
             settings = dialog.get_settings()
@@ -1295,12 +1346,18 @@ class PDFToExcelGUI(QMainWindow):
             self.address_separator = settings['address_separator']
             self.province_default = settings['province_default']
             
-            # Explicitly set apartment-related settings
+            # Update apartment settings more explicitly
             self.extract_apartment = settings.get('extract_apartment', False)
             self.apartment_column_name = settings.get('apartment_column_name', 'Apartment')
-            # Only set filter_apartments to True if explicitly set in settings
+            # Directly set filter_apartments from settings
             self.filter_apartments = settings.get('filter_apartments', False)
             self.include_apartment_column = settings.get('include_apartment_column', True)
+            
+            # Log the settings for debugging
+            if self.enable_logging:
+                logging.info(f"Apartment settings: extract={self.extract_apartment}, "
+                            f"filter={self.filter_apartments}, "
+                            f"include_column={self.include_apartment_column}")
             
             if self.extract_apartment and self.include_apartment_column:
                 self.column_names['Apartment'] = self.apartment_column_name
