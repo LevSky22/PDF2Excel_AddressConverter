@@ -97,6 +97,7 @@ translations = {
         'longueuil': "Longueuil",
         'unknown': "Inconnu",
         'use_custom_sectors': "Utiliser des secteurs personnalisés",
+        'remove_accents': "Retirer les accents",
     },
     'English': {
         'window_title': "PDF to Excel Converter",
@@ -175,6 +176,7 @@ translations = {
         'longueuil': "Longueuil",
         'unknown': "Unknown",
         'use_custom_sectors': "Use Custom Sectors",
+        'remove_accents': "Remove accented characters",
     }
 }
 
@@ -244,6 +246,7 @@ class ConversionThread(QThread):
         self.region_branch_ids = None
         self.use_custom_sectors = False
         self.custom_sector_ids = {}
+        self.remove_accents = False
 
     def run(self):
         try:
@@ -628,6 +631,16 @@ class ColumnSettingsDialog(QDialog):
         # Set size of dialog
         self.resize(600, 800)  # Adjust these values as needed
 
+        # Add remove accents option
+        accent_group = QFrame()
+        accent_group.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
+        accent_group_layout = QVBoxLayout(accent_group)
+        
+        self.remove_accents_checkbox = QCheckBox(translations[self.parent.language]['remove_accents'])
+        self.remove_accents_checkbox.setStyleSheet("QCheckBox { font-weight: bold; padding: 5px; }")
+        accent_group_layout.addWidget(self.remove_accents_checkbox)
+        layout.addWidget(accent_group)
+
     def load_presets(self):
         """Load available presets from file"""
         self.preset_combo.clear()
@@ -948,6 +961,9 @@ class ColumnSettingsDialog(QDialog):
             }
         })
         
+        # Add remove accents option
+        settings['remove_accents'] = self.remove_accents_checkbox.isChecked()
+        
         return settings
 
     def reset_to_defaults(self):
@@ -1073,6 +1089,7 @@ class PDFToExcelGUI(QMainWindow):
         self.date_value = None
         self.filter_by_region = False
         self.region_branch_ids = {}
+        self.remove_accents = False
 
     def setup_ui(self):
         # Top bar with Language and About
@@ -1356,6 +1373,11 @@ class PDFToExcelGUI(QMainWindow):
         else:
             self.conversion_thread.region_branch_ids = self.region_branch_ids
         
+        # Add debug logging for remove_accents before setting it
+        logging.info(f"Main GUI remove_accents value: {getattr(self, 'remove_accents', False)}")
+        self.conversion_thread.remove_accents = getattr(self, 'remove_accents', False)
+        logging.info(f"ConversionThread remove_accents value: {self.conversion_thread.remove_accents}")
+        
         self.conversion_thread.progress_update.connect(self.update_progress)
         self.conversion_thread.conversion_complete.connect(self.conversion_finished)
         self.conversion_thread.error_occurred.connect(self.show_error)
@@ -1484,6 +1506,7 @@ class PDFToExcelGUI(QMainWindow):
                 self.region_branch_ids = self.custom_sector_ids
             else:
                 self.region_branch_ids = settings.get('region_branch_ids', {})
+            self.remove_accents = settings.get('remove_accents', False)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

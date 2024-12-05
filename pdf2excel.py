@@ -10,6 +10,7 @@ import logging
 import tabula
 import time
 from quebec_regions_mapping import get_shore_region, get_custom_sector
+from unidecode import unidecode
 
 def setup_logging():
     logs_dir = 'logs'
@@ -113,12 +114,26 @@ def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False,
                 merged_name="Full Name", default_values=None, file_format='xlsx',
                 output_dir=None, custom_filename=None, merge_address=False,
                 merged_address_name="Complete Address", address_separator=", ",
-                province_default="QC", should_extract_apartment=False, apartment_column_name="Apartment",
-                filter_apartments=False, include_apartment_column=True,
-                include_phone=False, phone_default="", 
-                include_date=False, date_value=None,
-                filter_by_region=False, region_branch_ids=None,
-                use_custom_sectors=False):
+                province_default="QC", should_extract_apartment=False, 
+                apartment_column_name="Apartment", filter_apartments=False, 
+                include_apartment_column=True, include_phone=False, phone_default="", 
+                include_date=False, date_value=None, filter_by_region=False, 
+                region_branch_ids=None, use_custom_sectors=False, remove_accents=False):
+    
+    logging.info(f"process_pdfs remove_accents setting: {remove_accents}")
+    
+    # Define clean_accents function with logging
+    def clean_accents(text):
+        if isinstance(text, str) and remove_accents:
+            cleaned = unidecode(text)
+            if cleaned != text:
+                logging.info(f"Cleaned text: '{text}' -> '{cleaned}'")
+            return cleaned
+        return text
+    
+    # Add logging for remove_accents flag
+    logging.info(f"Remove accents setting: {remove_accents}")
+    
     if column_names is None:
         column_names = {
             'First Name': 'First Name',
@@ -200,6 +215,7 @@ def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False,
         if merge_address:
             merged_addresses = []
             apartments = []
+            branch_ids = []  # Add list to store branch IDs
             valid_indices = []
             
             for idx, row in df.iterrows():
@@ -214,9 +230,6 @@ def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False,
                         continue
                     
                     # If we get here, either filtering is off or this address has no apartment
-                    if merge_address:
-                        logging.info(f"Merging address components: {clean_addr}, {row['municipality_borough']}, {province_default}")
-                    
                     address_parts = [
                         clean_addr,
                         row['municipality_borough'],
@@ -228,6 +241,10 @@ def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False,
                     # Check for duplicates before adding
                     if merged_address not in merged_addresses:
                         merged_addresses.append(merged_address)
+                        # Store Branch ID if it exists
+                        if 'Branch ID' in row:
+                            branch_ids.append(row['Branch ID'])
+                            logging.info(f"Storing Branch ID: {row['Branch ID']} for address: {merged_address}")
                         if include_apartment_column and not filter_apartments:
                             apartments.append(apt)
                         valid_indices.append(idx)
@@ -254,11 +271,15 @@ def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False,
                     # Check for duplicates before adding
                     if merged_address not in merged_addresses:
                         merged_addresses.append(merged_address)
+                        # Store Branch ID if it exists
+                        if 'Branch ID' in row:
+                            branch_ids.append(row['Branch ID'])
+                            logging.info(f"Storing Branch ID: {row['Branch ID']} for address: {merged_address}")
                         valid_indices.append(idx)
                     else:
                         logging.info(f"Skipping duplicate address: {merged_address}")
             
-            # Filter the DataFrame to only include valid rows
+            # After merging addresses, create output_data ONCE
             if valid_indices:
                 logging.info(f"Filtering DataFrame to {len(valid_indices)} valid entries")
                 df = df.loc[valid_indices].copy()
@@ -267,32 +288,54 @@ def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False,
                 
                 output_data = {}
                 
-                if filter_by_region and 'Branch ID' in df.columns:
-                    logging.info("Adding Branch IDs to output")
+                # Add Branch IDs first if they exist
+                if branch_ids:
+                    output_data['Branch ID'] = branch_ids[:base_length]
+                    logging.info(f"Added {len(branch_ids)} Branch IDs to output")
+                elif filter_by_region and 'Branch ID' in df.columns:
                     output_data['Branch ID'] = df['Branch ID'].tolist()[:base_length]
+                    logging.info("Added Branch IDs from DataFrame")
                 
+                # Add other data with accent cleaning
                 if merge_names:
-                    logging.info(f"Adding merged names with default: {default_values.get(merged_name, 'À l\'occupant')}")
-                    output_data[merged_name] = [default_values.get(merged_name, "À l'occupant")] * base_length
+                    original = default_values.get(merged_name, "À l'occupant")
+                    cleaned = clean_accents(original)
+                    logging.info(f"Merged name default value: '{original}' -> '{cleaned}'")
+                    output_data[merged_name] = [cleaned] * base_length
                 else:
-                    logging.info("Adding separate first and last names")
-                    output_data[column_names['First Name']] = [default_values.get(column_names['First Name'], 'À')] * base_length
-                    output_data[column_names['Last Name']] = [default_values.get(column_names['Last Name'], "l'occupant")] * base_length
+                    output_data[column_names['First Name']] = [clean_accents(default_values.get(column_names['First Name'], 'À'))] * base_length
+                    output_data[column_names['Last Name']] = [clean_accents(default_values.get(column_names['Last Name'], "l'occupant"))] * base_length
                 
-                logging.info("Adding merged addresses")
-                output_data[merged_address_name] = merged_addresses[:base_length]
+                # Log address cleaning
+                logging.info("Cleaning addresses:")
+                for i, addr in enumerate(merged_addresses[:base_length]):
+                    cleaned = clean_accents(addr)
+                    if cleaned != addr:
+                        logging.info(f"Address {i}: '{addr}' -> '{cleaned}'")
+                output_data[merged_address_name] = [clean_accents(addr) for addr in merged_addresses[:base_length]]
                 
-                if include_apartment_column:
-                    logging.info("Adding apartment numbers")
-                    output_data[apartment_column_name] = apartments[:base_length]
+                if include_apartment_column and not filter_apartments:
+                    output_data[apartment_column_name] = [clean_accents(apt) for apt in apartments[:base_length]]
                 
                 if include_phone:
-                    logging.info(f"Adding phone numbers with default: {phone_default}")
-                    output_data['Phone'] = [phone_default] * base_length
+                    output_data['Phone'] = [clean_accents(phone_default)] * base_length
                 
                 if include_date:
-                    logging.info(f"Adding dates with value: {date_value}")
-                    output_data['Date'] = [date_value] * base_length
+                    output_data['Date'] = [date_value] * base_length  # Don't clean date values
+                
+                # Log final output data
+                logging.info("Final output_data sample:")
+                for key in output_data:
+                    if isinstance(output_data[key], list) and output_data[key]:
+                        logging.info(f"{key}: First value = '{output_data[key][0]}'")
+                
+                # Remove accents if enabled
+                if remove_accents:
+                    logging.info("Removing accents from output data")
+                    for key in output_data:
+                        if isinstance(output_data[key], list):
+                            output_data[key] = [clean_accents(val) for val in output_data[key]]
+                            logging.info(f"Removed accents from column: {key}")
 
                 # Verify array lengths before creating DataFrame
                 lengths = {k: len(v) for k, v in output_data.items()}
@@ -308,8 +351,7 @@ def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False,
                             else:
                                 output_data[key].extend([None] * (base_length - len(output_data[key])))
 
-                # Create DataFrame after ensuring all arrays have same length
-                logging.info("Creating final DataFrame")
+                # Create DataFrame after all processing
                 output_df = pd.DataFrame(output_data)
                 logging.info(f"Final DataFrame shape: {output_df.shape}")
                 all_dfs.append(output_df)
@@ -486,7 +528,7 @@ def convert_pdf_to_excel(pdf_files, output_dir, merge_files=False, custom_filena
                         include_phone=False, phone_default="",
                         include_date=False, date_value=None,
                         filter_by_region=False, region_branch_ids=None,
-                        use_custom_sectors=False):
+                        use_custom_sectors=False, remove_accents=False):
     logging.info(f"Converting PDFs: {pdf_files}")
     
     pdf_paths = [pdf_files] if isinstance(pdf_files, str) else pdf_files
@@ -521,7 +563,8 @@ def convert_pdf_to_excel(pdf_files, output_dir, merge_files=False, custom_filena
             date_value=date_value,
             filter_by_region=filter_by_region,
             region_branch_ids=region_branch_ids,
-            use_custom_sectors=use_custom_sectors
+            use_custom_sectors=use_custom_sectors,
+            remove_accents=remove_accents
         )
         
         if merge_files:
