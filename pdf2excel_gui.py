@@ -96,6 +96,7 @@ translations = {
         'laval': "Laval",
         'longueuil': "Longueuil",
         'unknown': "Inconnu",
+        'use_custom_sectors': "Utiliser des secteurs personnalisés",
     },
     'English': {
         'window_title': "PDF to Excel Converter",
@@ -173,6 +174,7 @@ translations = {
         'laval': "Laval",
         'longueuil': "Longueuil",
         'unknown': "Unknown",
+        'use_custom_sectors': "Use Custom Sectors",
     }
 }
 
@@ -240,6 +242,8 @@ class ConversionThread(QThread):
         self.date_value = None
         self.filter_by_region = False
         self.region_branch_ids = None
+        self.use_custom_sectors = False
+        self.custom_sector_ids = {}
 
     def run(self):
         try:
@@ -254,6 +258,7 @@ class ConversionThread(QThread):
                 logging.info(f"Output directory: {self.output_dir}")
                 logging.info(f"Merge files: {self.merge_files}")
                 logging.info(f"Custom filename: {self.custom_filename}")
+                logging.info(f"Custom sectors enabled: {self.use_custom_sectors}")
 
             output_file = None
             # Only apply apartment filtering if explicitly set to True
@@ -264,7 +269,8 @@ class ConversionThread(QThread):
             if self.enable_logging:
                 logging.info(f"Settings: extract_apartment={self.extract_apartment}, "
                             f"filter_apartments={should_filter}, "
-                            f"merge_address={self.merge_address}")
+                            f"merge_address={self.merge_address}, "
+                            f"use_custom_sectors={self.use_custom_sectors}")
 
             for progress in convert_pdf_to_excel(
                 self.pdf_files, 
@@ -283,14 +289,15 @@ class ConversionThread(QThread):
                 self.province_default,
                 self.extract_apartment,
                 self.apartment_column_name,
-                should_filter,  # Pass the explicit filter check here
+                should_filter,
                 self.include_apartment_column,
                 self.include_phone,
                 self.phone_default,
                 self.include_date,
                 self.date_value,
                 self.filter_by_region,
-                self.region_branch_ids
+                self.region_branch_ids,
+                use_custom_sectors=self.use_custom_sectors  # Add custom sectors parameter
             ):
                 if isinstance(progress, str):
                     output_file = progress
@@ -547,14 +554,45 @@ class ColumnSettingsDialog(QDialog):
             'flyer_unknown': ('unknown', 'flyer_unknown')
         }
         
+        # Add regular region inputs
         for region_key, (translation_key, default_id) in regions.items():
             row_layout = QHBoxLayout()
             row_layout.addWidget(QLabel(translations[self.parent.language][translation_key]))
             branch_input = QLineEdit()
             branch_input.setPlaceholderText(default_id)
-            branch_input.setText(default_id)  # Set default value
+            branch_input.setText(default_id)
             branch_input.setEnabled(False)
             self.region_inputs[region_key] = branch_input
+            row_layout.addWidget(branch_input)
+            region_group_layout.addLayout(row_layout)
+        
+        # Add separator
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setFrameShadow(QFrame.Sunken)
+        region_group_layout.addWidget(separator)
+        
+        # Add custom sectors option
+        self.use_custom_sectors_checkbox = QCheckBox(translations[self.parent.language].get('use_custom_sectors', 'Use Custom Sectors'))
+        self.use_custom_sectors_checkbox.setStyleSheet("QCheckBox { font-weight: bold; padding: 5px; }")
+        self.use_custom_sectors_checkbox.stateChanged.connect(self.on_custom_sectors_changed)
+        region_group_layout.addWidget(self.use_custom_sectors_checkbox)
+        
+        # Create custom sector inputs
+        self.sector_inputs = {}
+        sectors = {
+            'flyer_chateauguay': ('chateauguay_region', 'flyer_chateauguay'),
+            # More sectors can be added here later
+        }
+        
+        for sector_key, (translation_key, default_id) in sectors.items():
+            row_layout = QHBoxLayout()
+            row_layout.addWidget(QLabel(translations[self.parent.language].get(translation_key, sector_key)))
+            branch_input = QLineEdit()
+            branch_input.setPlaceholderText(default_id)
+            branch_input.setText(default_id)
+            branch_input.setEnabled(False)
+            self.sector_inputs[sector_key] = branch_input
             row_layout.addWidget(branch_input)
             region_group_layout.addLayout(row_layout)
         
@@ -691,6 +729,16 @@ class ColumnSettingsDialog(QDialog):
                         default_value = default_regions.get(region_key, region_key)
                         input_field.setText(region_branch_ids.get(region_key, default_value))
                         input_field.setEnabled(is_filter_enabled)
+                    
+                    # Load custom sectors settings
+                    self.use_custom_sectors_checkbox.setChecked(settings.get('use_custom_sectors', False))
+                    custom_sector_ids = settings.get('custom_sector_ids', {})
+                    for sector, input_field in self.sector_inputs.items():
+                        if sector in custom_sector_ids:
+                            input_field.setText(custom_sector_ids[sector])
+                    
+                    # Update enabled states
+                    self.on_custom_sectors_changed(settings.get('use_custom_sectors', False))
                 
         except FileNotFoundError:
             pass
@@ -819,6 +867,16 @@ class ColumnSettingsDialog(QDialog):
                 region_key = [k for k, v in self.region_inputs.items() if v == input_field][0]
                 input_field.setText(region_key)
 
+    def on_custom_sectors_changed(self, state):
+        """Handle custom sectors checkbox state change"""
+        is_checked = state == Qt.Checked
+        for input_field in self.sector_inputs.values():
+            input_field.setEnabled(is_checked)
+            if is_checked and not input_field.text():
+                # Set default value if empty when enabled
+                sector_key = [k for k, v in self.sector_inputs.items() if v == input_field][0]
+                input_field.setText(sector_key)
+
     def get_settings(self):
         """Get all settings from the dialog"""
         # Get the merged name default value first
@@ -867,6 +925,26 @@ class ColumnSettingsDialog(QDialog):
                 region: input_field.text()
                 for region, input_field in self.region_inputs.items()
                 if self.filter_region_checkbox.isChecked()
+            }
+        })
+        
+        # Add custom sectors settings
+        settings.update({
+            'use_custom_sectors': self.use_custom_sectors_checkbox.isChecked(),
+            'custom_sector_ids': {
+                sector: input_field.text()
+                for sector, input_field in self.sector_inputs.items()
+                if self.use_custom_sectors_checkbox.isChecked()
+            }
+        })
+        
+        # Update region settings to include custom sectors
+        settings.update({
+            'filter_by_region': self.filter_region_checkbox.isChecked(),
+            'region_branch_ids': {
+                region: input_field.text()
+                for region, input_field in self.region_inputs.items()
+                if self.filter_region_checkbox.isChecked() and not self.use_custom_sectors_checkbox.isChecked()
             }
         })
         
@@ -1267,8 +1345,16 @@ class PDFToExcelGUI(QMainWindow):
         self.conversion_thread.date_column_name = self.date_column_name
         self.conversion_thread.date_value = self.date_value
         
+        # Add custom sectors settings
+        self.conversion_thread.use_custom_sectors = getattr(self, 'use_custom_sectors', False)
+        self.conversion_thread.custom_sector_ids = getattr(self, 'custom_sector_ids', {})
+        
+        # Update region settings
         self.conversion_thread.filter_by_region = self.filter_by_region
-        self.conversion_thread.region_branch_ids = self.region_branch_ids
+        if self.use_custom_sectors:
+            self.conversion_thread.region_branch_ids = self.custom_sector_ids
+        else:
+            self.conversion_thread.region_branch_ids = self.region_branch_ids
         
         self.conversion_thread.progress_update.connect(self.update_progress)
         self.conversion_thread.conversion_complete.connect(self.conversion_finished)
@@ -1387,6 +1473,17 @@ class PDFToExcelGUI(QMainWindow):
             # Region settings
             self.filter_by_region = settings['filter_by_region']
             self.region_branch_ids = settings['region_branch_ids']
+            
+            # Update custom sectors settings
+            self.use_custom_sectors = settings.get('use_custom_sectors', False)
+            self.custom_sector_ids = settings.get('custom_sector_ids', {})
+            
+            # Update region settings
+            self.filter_by_region = settings.get('filter_by_region', False)
+            if self.use_custom_sectors:
+                self.region_branch_ids = self.custom_sector_ids
+            else:
+                self.region_branch_ids = settings.get('region_branch_ids', {})
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

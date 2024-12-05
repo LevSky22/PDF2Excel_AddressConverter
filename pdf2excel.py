@@ -9,7 +9,7 @@ from openpyxl.utils import get_column_letter
 import logging
 import tabula
 import time
-from quebec_regions_mapping import get_shore_region
+from quebec_regions_mapping import get_shore_region, get_custom_sector
 
 def setup_logging():
     logs_dir = 'logs'
@@ -117,7 +117,8 @@ def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False,
                 filter_apartments=False, include_apartment_column=True,
                 include_phone=False, phone_default="", 
                 include_date=False, date_value=None,
-                filter_by_region=False, region_branch_ids=None):
+                filter_by_region=False, region_branch_ids=None,
+                use_custom_sectors=False):
     if column_names is None:
         column_names = {
             'First Name': 'First Name',
@@ -148,27 +149,51 @@ def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False,
         # Initialize output_data dictionary
         output_data = {}
         
-        # Add branch ID based on region if filtering is enabled
-        if filter_by_region and region_branch_ids:
+        # Add debug logging at the start
+        logging.info("PDF Processing Settings:")
+        logging.info(f"use_custom_sectors = {use_custom_sectors}")
+        logging.info(f"filter_by_region = {filter_by_region}")
+        logging.info(f"region_branch_ids = {region_branch_ids}")
+        
+        if filter_by_region or use_custom_sectors:
             filtered_df = pd.DataFrame()
+            logging.info(f"Starting filtering with {len(df)} rows")
+            logging.info(f"Filtering mode: use_custom_sectors={use_custom_sectors}, filter_by_region={filter_by_region}")
+            
+            # Start with empty DataFrame
+            filtered_df = pd.DataFrame(columns=df.columns)
             
             for idx, row in df.iterrows():
-                region = get_shore_region(row['municipality_borough'])
-                logging.info(f"City: {row['municipality_borough']} -> Region: {region}")
-                branch_id = region_branch_ids.get(f'flyer_{region}', region_branch_ids.get('flyer_unknown', 'unknown'))
-                logging.info(f"Branch ID resolved to: {branch_id}")
-                if branch_id != 'unknown':
-                    row_df = pd.DataFrame([row])
-                    row_df['Branch ID'] = branch_id
-                    filtered_df = pd.concat([filtered_df, row_df])
-                else:
-                    logging.warning(f"Unknown region for city: {row['municipality_borough']}")
+                city = row['municipality_borough']
+                
+                if use_custom_sectors:
+                    # Use custom sector filtering
+                    sector = get_custom_sector(city)
+                    logging.info(f"Checking city '{city}' for custom sector: {sector}")
+                    if sector:
+                        row_df = pd.DataFrame([row])
+                        row_df['Branch ID'] = sector
+                        filtered_df = pd.concat([filtered_df, row_df])
+                        logging.info(f"Added city to custom sector {sector}: {city}")
+                    else:
+                        logging.info(f"Skipping city not in custom sector: {city}")
+                elif filter_by_region:  # Only do regular region filtering if not using custom sectors
+                    region = get_shore_region(city)
+                    logging.info(f"City: {city} -> Region: {region}")
+                    branch_id = region_branch_ids.get(f'flyer_{region}', region_branch_ids.get('flyer_unknown', 'unknown'))
+                    logging.info(f"Branch ID resolved to: {branch_id}")
+                    if branch_id != 'unknown':
+                        row_df = pd.DataFrame([row])
+                        row_df['Branch ID'] = branch_id
+                        filtered_df = pd.concat([filtered_df, row_df])
             
+            # After filtering, replace original df with filtered one
             if len(filtered_df) > 0:
-                df = filtered_df
+                df = filtered_df.copy()  # Make sure to create a copy
                 output_data['Branch ID'] = df['Branch ID'].tolist()
+                logging.info(f"Filtered to {len(df)} rows from {len(filtered_df)} matches")
             else:
-                logging.error("No valid regions found in the data")
+                logging.error("No valid cities found after filtering")
                 return [pd.DataFrame()]
         
         # Handle name fields AFTER filtering the DataFrame
@@ -460,7 +485,8 @@ def convert_pdf_to_excel(pdf_files, output_dir, merge_files=False, custom_filena
                         filter_apartments=False, include_apartment_column=True,
                         include_phone=False, phone_default="",
                         include_date=False, date_value=None,
-                        filter_by_region=False, region_branch_ids=None):
+                        filter_by_region=False, region_branch_ids=None,
+                        use_custom_sectors=False):
     logging.info(f"Converting PDFs: {pdf_files}")
     
     pdf_paths = [pdf_files] if isinstance(pdf_files, str) else pdf_files
@@ -494,7 +520,8 @@ def convert_pdf_to_excel(pdf_files, output_dir, merge_files=False, custom_filena
             include_date=include_date,
             date_value=date_value,
             filter_by_region=filter_by_region,
-            region_branch_ids=region_branch_ids
+            region_branch_ids=region_branch_ids,
+            use_custom_sectors=use_custom_sectors
         )
         
         if merge_files:

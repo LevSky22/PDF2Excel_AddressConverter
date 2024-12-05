@@ -246,6 +246,33 @@ LONGUEUIL_CITIES = {
     'LEMOYNE', 'LE MOYNE'
 }
 
+# Define custom sectors using existing city definitions
+CUSTOM_SECTORS = {
+    'flyer_chateauguay': [
+        'Candiac', 'Châteauguay', 'Delson', 'La Prairie', 'Léry', 'Mercier',
+        'Saint-Constant', 'Saint-Isidore', 'Saint-Mathieu', 'Saint-Philippe',
+        'Sainte-Catherine'
+    ]
+}
+
+def get_custom_sector(city):
+    """
+    Get the custom sector for a given city.
+    Returns sector name or None if city isn't in any custom sector
+    """
+    if not city:
+        return None
+    
+    city_upper = city.upper().strip()
+    city_unaccented = unidecode(city_upper)
+    
+    for sector, cities in CUSTOM_SECTORS.items():
+        # Check both regular and unaccented versions of city names
+        if any(city_upper == c.upper() or city_unaccented == unidecode(c).upper() for c in cities):
+            return sector
+    
+    return None
+
 def get_shore_region(city):
     """
     Get the shore region for a given city.
