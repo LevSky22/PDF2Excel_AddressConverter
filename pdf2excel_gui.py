@@ -250,6 +250,9 @@ class ConversionThread(QThread):
 
     def run(self):
         try:
+            if self.enable_logging:
+                logging.info(f"ConversionThread starting with remove_accents={self.remove_accents}")
+                
             # Initialize logging if enabled
             if self.enable_logging:
                 # Reset any existing handlers
@@ -300,7 +303,8 @@ class ConversionThread(QThread):
                 self.date_value,
                 self.filter_by_region,
                 self.region_branch_ids,
-                use_custom_sectors=self.use_custom_sectors  # Add custom sectors parameter
+                use_custom_sectors=self.use_custom_sectors,  # Add custom sectors parameter
+                remove_accents=self.remove_accents  # Add remove_accents parameter
             ):
                 if isinstance(progress, str):
                     output_file = progress
@@ -638,6 +642,8 @@ class ColumnSettingsDialog(QDialog):
         
         self.remove_accents_checkbox = QCheckBox(translations[self.parent.language]['remove_accents'])
         self.remove_accents_checkbox.setStyleSheet("QCheckBox { font-weight: bold; padding: 5px; }")
+        # Set initial state from parent's current setting
+        self.remove_accents_checkbox.setChecked(getattr(parent, 'remove_accents', False))
         accent_group_layout.addWidget(self.remove_accents_checkbox)
         layout.addWidget(accent_group)
 
@@ -1089,7 +1095,7 @@ class PDFToExcelGUI(QMainWindow):
         self.date_value = None
         self.filter_by_region = False
         self.region_branch_ids = {}
-        self.remove_accents = False
+        self.remove_accents = False  # Initialize remove_accents setting
 
     def setup_ui(self):
         # Top bar with Language and About
@@ -1373,10 +1379,9 @@ class PDFToExcelGUI(QMainWindow):
         else:
             self.conversion_thread.region_branch_ids = self.region_branch_ids
         
-        # Add debug logging for remove_accents before setting it
-        logging.info(f"Main GUI remove_accents value: {getattr(self, 'remove_accents', False)}")
-        self.conversion_thread.remove_accents = getattr(self, 'remove_accents', False)
-        logging.info(f"ConversionThread remove_accents value: {self.conversion_thread.remove_accents}")
+        # Update remove_accents setting - add explicit logging
+        logging.info(f"Setting remove_accents in conversion thread to: {self.remove_accents}")
+        self.conversion_thread.remove_accents = self.remove_accents  # Make sure to use instance variable
         
         self.conversion_thread.progress_update.connect(self.update_progress)
         self.conversion_thread.conversion_complete.connect(self.conversion_finished)
@@ -1426,6 +1431,7 @@ class PDFToExcelGUI(QMainWindow):
         dialog.filter_apartments_checkbox.setChecked(self.filter_apartments)
         dialog.include_apartment_checkbox.setChecked(self.include_apartment_column)
         dialog.merge_address_checkbox.setChecked(self.merge_address)
+        dialog.remove_accents_checkbox.setChecked(self.remove_accents)  # Set current state
         
         # Force update handlers
         dialog.on_extract_apartment_changed(self.extract_apartment)
@@ -1507,6 +1513,7 @@ class PDFToExcelGUI(QMainWindow):
             else:
                 self.region_branch_ids = settings.get('region_branch_ids', {})
             self.remove_accents = settings.get('remove_accents', False)
+            logging.info(f"Updated remove_accents setting in GUI to: {self.remove_accents}")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

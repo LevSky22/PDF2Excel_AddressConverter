@@ -74,7 +74,7 @@ def extract_apartment(address):
         apartment = address[apt_index:].strip()
         return base_address, apartment
 
-def clean_text(text, extract_apt=False):
+def clean_text(text, extract_apt=False, remove_accents=False):
     if not text:
         return ("", None) if extract_apt else ""
     
@@ -99,15 +99,25 @@ def clean_text(text, extract_apt=False):
         # Extract apartment number and clean the address
         cleaned, apartment = extract_apartment(cleaned)
         # Clean up any remaining trailing punctuation
-        # Modified to preserve single letters at start of street names
         cleaned = re.sub(r'[\s\-,]+(?<!E)(?<!O)\.?$', '', cleaned)
         cleaned = cleaned.strip()
+        
+        # Add accent removal if enabled
+        if remove_accents:
+            cleaned = unidecode(cleaned)
+            if apartment:
+                apartment = unidecode(apartment)
+                
         return cleaned, apartment
     else:
         # When not extracting apartments, preserve the original address format
-        # Modified to preserve single letters at start of street names
         cleaned = re.sub(r'[\s\-,]+(?<!E)(?<!O)\.?$', '', cleaned)
         cleaned = cleaned.strip()
+        
+        # Add accent removal if enabled
+        if remove_accents:
+            cleaned = unidecode(cleaned)
+            
         return cleaned
 
 def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False, 
@@ -259,7 +269,7 @@ def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False,
                             logging.info(f"Filtering out address with apartment: {row['address']}")
                             continue
                     
-                    clean_addr = clean_text(row['address'])
+                    clean_addr = clean_text(row['address'], extract_apt=should_extract_apartment, remove_accents=remove_accents)
                     address_parts = [
                         clean_addr,
                         row['municipality_borough'],
@@ -363,7 +373,7 @@ def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False,
                 valid_indices = []
                 
                 for idx, addr in enumerate(df['address']):
-                    clean_addr, apt = clean_text(addr, extract_apt=True)
+                    clean_addr, apt = clean_text(addr, extract_apt=True, remove_accents=remove_accents)
                     
                     # First check if we should filter out this address
                     if filter_apartments and apt is not None:
@@ -398,7 +408,7 @@ def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False,
             else:
                 # Just pass through addresses without any apartment processing
                 output_data.update({
-                    column_names['Address']: df['address'].apply(lambda x: clean_text(x, extract_apt=False)),
+                    column_names['Address']: df['address'].apply(lambda x: clean_text(x, extract_apt=False, remove_accents=remove_accents)),
                     column_names['City']: df['municipality_borough'],
                     column_names['Province']: default_values.get(column_names['Province'], ''),
                     column_names['Postal Code']: df['postal_code']
@@ -529,7 +539,7 @@ def convert_pdf_to_excel(pdf_files, output_dir, merge_files=False, custom_filena
                         include_date=False, date_value=None,
                         filter_by_region=False, region_branch_ids=None,
                         use_custom_sectors=False, remove_accents=False):
-    logging.info(f"Converting PDFs: {pdf_files}")
+    logging.info(f"Starting conversion with remove_accents={remove_accents}")
     
     pdf_paths = [pdf_files] if isinstance(pdf_files, str) else pdf_files
     total_files = len(pdf_paths)
