@@ -240,7 +240,6 @@ LONGUEUIL_CITIES = {
     'SAINT-LAMBERT', 'ST-LAMBERT',
     'BOUCHERVILLE',
     'SAINT-BRUNO-DE-MONTARVILLE', 'ST-BRUNO', 'SAINT-BRUNO',
-    'LA PRAIRIE',
     'GREENFIELD PARK',
     'SAINT-HUBERT', 'ST-HUBERT',
     'LEMOYNE', 'LE MOYNE'
@@ -252,22 +251,43 @@ CUSTOM_SECTORS = {
         'Candiac', 'Châteauguay', 'Delson', 'La Prairie', 'Léry', 'Mercier',
         'Saint-Constant', 'Saint-Isidore', 'Saint-Mathieu', 'Saint-Philippe',
         'Sainte-Catherine'
+    ],
+    'flyer_sector_west': [
+        # Include only the cities we want from MRC Vaudreuil-Soulanges
+        'Hudson', 'Les Cèdres', 'L\'Île-Cadieux', 'L\'Île-Perrot', 
+        'Notre-Dame-de-l\'Île-Perrot', 'Pincourt', 'Pointe-des-Cascades',
+        'Saint-Lazare', 'Terrasse-Vaudreuil', 'Vaudreuil-Dorion',
+        'Vaudreuil-sur-le-Lac'
     ]
 }
 
-def get_custom_sector(city):
+# Add this new constant for postal code sectors
+POSTAL_CODE_SECTORS = {
+    'flyer_sector_west': [
+        'H8T', 'H4Y', 'H4S', 'H8Y', 'H9B', 'H9P', 'H8Z', 'H9A', 'H9G', 
+        'H9R', 'H9S', 'H9C', 'H9H', 'H9E', 'H9J', 'H9W', 'H9K', 'H9X'
+    ]
+}
+
+def get_custom_sector(city, postal_code=None):
     """
-    Get the custom sector for a given city.
-    Returns sector name or None if city isn't in any custom sector
+    Get the custom sector for a given city and postal code.
+    Returns sector name or None if city/postal code isn't in any custom sector
     """
-    if not city:
+    if not city and not postal_code:
         return None
     
-    city_upper = city.upper().strip()
+    city_upper = city.upper().strip() if city else ''
     city_unaccented = unidecode(city_upper)
+    postal_prefix = postal_code[:3].upper() if postal_code else ''
     
+    # Check postal code first
+    for sector, postal_codes in POSTAL_CODE_SECTORS.items():
+        if postal_prefix and postal_prefix in postal_codes:
+            return sector
+    
+    # Then check city
     for sector, cities in CUSTOM_SECTORS.items():
-        # Check both regular and unaccented versions of city names
         if any(city_upper == c.upper() or city_unaccented == unidecode(c).upper() for c in cities):
             return sector
     

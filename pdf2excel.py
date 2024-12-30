@@ -184,6 +184,7 @@ def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False,
             filtered_df = pd.DataFrame()
             logging.info(f"Starting filtering with {len(df)} rows")
             logging.info(f"Filtering mode: use_custom_sectors={use_custom_sectors}, filter_by_region={filter_by_region}")
+            logging.info(f"Region branch IDs: {region_branch_ids}")
             
             # Start with empty DataFrame
             filtered_df = pd.DataFrame(columns=df.columns)
@@ -193,15 +194,16 @@ def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False,
                 
                 if use_custom_sectors:
                     # Use custom sector filtering
-                    sector = get_custom_sector(city)
-                    logging.info(f"Checking city '{city}' for custom sector: {sector}")
-                    if sector:
+                    sector = get_custom_sector(city, row['postal_code'])
+                    logging.info(f"Checking city '{city}' and postal code '{row['postal_code']}' for custom sector: {sector}")
+                    # Only include if sector is in region_branch_ids
+                    if sector and sector in region_branch_ids:
                         row_df = pd.DataFrame([row])
-                        row_df['Branch ID'] = sector
+                        row_df['Branch ID'] = region_branch_ids[sector]
                         filtered_df = pd.concat([filtered_df, row_df])
-                        logging.info(f"Added city to custom sector {sector}: {city}")
+                        logging.info(f"Added to custom sector {sector}: {city} ({row['postal_code']})")
                     else:
-                        logging.info(f"Skipping city not in custom sector: {city}")
+                        logging.info(f"Skipping city not in selected sectors: {city} ({row['postal_code']})")
                 elif filter_by_region:  # Only do regular region filtering if not using custom sectors
                     region = get_shore_region(city)
                     logging.info(f"City: {city} -> Region: {region}")

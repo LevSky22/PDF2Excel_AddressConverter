@@ -14,7 +14,7 @@ import time
 import logging
 import json
 import ctypes
-from quebec_regions_mapping import get_shore_region
+from quebec_regions_mapping import get_shore_region, get_custom_sector, POSTAL_CODE_SECTORS
 
 VERSION = "1.5"
 
@@ -587,12 +587,29 @@ class ColumnSettingsDialog(QDialog):
         
         # Create custom sector inputs
         self.sector_inputs = {}
+        self.sector_checkboxes = {}  # Add dictionary for checkboxes
         sectors = {
             'flyer_chateauguay': ('chateauguay_region', 'flyer_chateauguay'),
-            # More sectors can be added here later
+            'flyer_sector_west': ('west_region', 'flyer_sector_west')
         }
         
+        # Add sector selection checkboxes
+        sector_label = QLabel("Select Sectors to Include:")
+        sector_label.setStyleSheet("font-weight: bold;")
+        region_group_layout.addWidget(sector_label)
+        
+        # Create a container widget for sector controls
+        self.sector_container = QWidget()
+        sector_container_layout = QVBoxLayout(self.sector_container)
+        
         for sector_key, (translation_key, default_id) in sectors.items():
+            # Add checkbox for sector selection
+            checkbox = QCheckBox(translations[self.parent.language].get(translation_key, sector_key))
+            checkbox.setChecked(False)  # Default to unchecked
+            self.sector_checkboxes[sector_key] = checkbox
+            sector_container_layout.addWidget(checkbox)
+            
+            # Add branch ID input (disabled)
             row_layout = QHBoxLayout()
             row_layout.addWidget(QLabel(translations[self.parent.language].get(translation_key, sector_key)))
             branch_input = QLineEdit()
@@ -601,7 +618,16 @@ class ColumnSettingsDialog(QDialog):
             branch_input.setEnabled(False)
             self.sector_inputs[sector_key] = branch_input
             row_layout.addWidget(branch_input)
-            region_group_layout.addLayout(row_layout)
+            sector_container_layout.addLayout(row_layout)
+            
+            # Connect checkbox to handler
+            checkbox.stateChanged.connect(lambda state, s=sector_key: self.on_sector_checkbox_changed(state, s))
+        
+        region_group_layout.addWidget(self.sector_container)
+        self.sector_container.setEnabled(False)  # Initially disabled
+        
+        # Connect the use_custom_sectors checkbox to enable/disable the sector container
+        self.use_custom_sectors_checkbox.stateChanged.connect(self.on_custom_sectors_changed)
         
         layout.addWidget(region_group)
         
@@ -889,12 +915,22 @@ class ColumnSettingsDialog(QDialog):
     def on_custom_sectors_changed(self, state):
         """Handle custom sectors checkbox state change"""
         is_checked = state == Qt.Checked
-        for input_field in self.sector_inputs.values():
-            input_field.setEnabled(is_checked)
-            if is_checked and not input_field.text():
-                # Set default value if empty when enabled
-                sector_key = [k for k, v in self.sector_inputs.items() if v == input_field][0]
-                input_field.setText(sector_key)
+        self.sector_container.setEnabled(is_checked)
+        
+        # If unchecking, also uncheck all sector checkboxes
+        if not is_checked:
+            for checkbox in self.sector_checkboxes.values():
+                checkbox.setChecked(False)
+        
+        # Update input field states based on both main checkbox and individual checkboxes
+        for sector, checkbox in self.sector_checkboxes.items():
+            self.sector_inputs[sector].setEnabled(is_checked and checkbox.isChecked())
+
+    def on_sector_checkbox_changed(self, state, sector_key):
+        """Handle individual sector checkbox changes"""
+        is_checked = state == Qt.Checked
+        if self.use_custom_sectors_checkbox.isChecked():
+            self.sector_inputs[sector_key].setEnabled(is_checked)
 
     def get_settings(self):
         """Get all settings from the dialog"""
@@ -943,7 +979,7 @@ class ColumnSettingsDialog(QDialog):
             'region_branch_ids': {
                 region: input_field.text()
                 for region, input_field in self.region_inputs.items()
-                if self.filter_region_checkbox.isChecked()
+                if self.filter_region_checkbox.isChecked() and not self.use_custom_sectors_checkbox.isChecked()
             }
         })
         
@@ -951,21 +987,15 @@ class ColumnSettingsDialog(QDialog):
         settings.update({
             'use_custom_sectors': self.use_custom_sectors_checkbox.isChecked(),
             'custom_sector_ids': {
-                sector: input_field.text()
-                for sector, input_field in self.sector_inputs.items()
-                if self.use_custom_sectors_checkbox.isChecked()
+                sector: self.sector_inputs[sector].text()
+                for sector, checkbox in self.sector_checkboxes.items()
+                if self.use_custom_sectors_checkbox.isChecked() and checkbox.isChecked()
             }
         })
         
         # Update region settings to include custom sectors
-        settings.update({
-            'filter_by_region': self.filter_region_checkbox.isChecked(),
-            'region_branch_ids': {
-                region: input_field.text()
-                for region, input_field in self.region_inputs.items()
-                if self.filter_region_checkbox.isChecked() and not self.use_custom_sectors_checkbox.isChecked()
-            }
-        })
+        if self.use_custom_sectors_checkbox.isChecked():
+            settings['region_branch_ids'] = settings['custom_sector_ids']
         
         # Add remove accents option
         settings['remove_accents'] = self.remove_accents_checkbox.isChecked()
