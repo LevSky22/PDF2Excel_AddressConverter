@@ -714,20 +714,28 @@ class ColumnSettingsDialog(QDialog):
                     
                     # Update all input fields regardless of merge state
                     for key in ['First Name', 'Last Name']:
-                        if key in self.column_inputs and key in settings.get('column_names', {}):
-                            self.column_inputs[key].setText(settings['column_names'][key])
-                            if key in settings.get('default_values', {}):
-                                self.default_inputs[key].setText(settings['default_values'][key])
+                        if key in self.column_inputs:
+                            column_name = settings['column_names'].get(key, key)
+                            self.column_inputs[key].setText(column_name)
+                            # Get default value using the new column name
+                            if column_name in settings.get('default_values', {}):
+                                self.default_inputs[key].setText(settings['default_values'][column_name])
                     
                     for key in ['Address', 'City', 'Province', 'Postal Code']:
-                        if key in self.column_inputs and key in settings.get('column_names', {}):
-                            self.column_inputs[key].setText(settings['column_names'][key])
-                            if key in settings.get('default_values', {}):
-                                self.default_inputs[key].setText(settings['default_values'][key])
+                        if key in self.column_inputs:
+                            column_name = settings['column_names'].get(key, key)
+                            self.column_inputs[key].setText(column_name)
+                            # Get default value using the new column name
+                            if column_name in settings.get('default_values', {}):
+                                self.default_inputs[key].setText(settings['default_values'][column_name])
                     
                     # Update merged fields
                     self.merged_name_input.setText(settings.get('merged_name', 'Full Name'))
-                    self.merged_default_value.setText(settings.get('merged_default', " l'occupant"))
+                    merged_default = settings.get('default_values', {}).get(
+                        settings.get('merged_name', 'Full Name'),
+                        settings.get('merged_default', "À l'occupant")
+                    )
+                    self.merged_default_value.setText(merged_default)
                     self.merged_address_input.setText(settings.get('merged_address_name', 'Complete Address'))
                     self.address_separator_input.setText(settings.get('address_separator', ', '))
                     self.province_default_input.setText(settings.get('province_default', 'QC'))
@@ -805,15 +813,29 @@ class ColumnSettingsDialog(QDialog):
             except FileNotFoundError:
                 presets = {}
             
+            # Log the current settings before saving
+            logging.info(f"Saving preset '{name}' with settings: {settings}")
+            
+            # If preset exists, completely replace it
             presets[name] = settings
             
             # Save with proper UTF-8 encoding and ensure_ascii=False
-            with open('column_presets.json', 'w', encoding='utf-8') as f:
-                json.dump(presets, f, ensure_ascii=False, indent=2)
-            
-            self.load_presets()
-            self.preset_combo.setCurrentText(name)
-            QMessageBox.information(self, "", translations[self.parent.language]['preset_saved'])
+            try:
+                with open('column_presets.json', 'w', encoding='utf-8') as f:
+                    json.dump(presets, f, ensure_ascii=False, indent=2)
+                
+                # Verify the save by reading back
+                with open('column_presets.json', 'r', encoding='utf-8') as f:
+                    saved_presets = json.load(f)
+                    if name in saved_presets and saved_presets[name] == settings:
+                        self.load_presets()
+                        self.preset_combo.setCurrentText(name)
+                        QMessageBox.information(self, "", translations[self.parent.language]['preset_saved'])
+                    else:
+                        raise Exception("Verification failed - preset not saved correctly")
+            except Exception as e:
+                logging.error(f"Error saving preset: {str(e)}")
+                QMessageBox.warning(self, "Error", f"Failed to save preset: {str(e)}")
 
     def delete_preset(self):
         """Delete the selected preset"""
@@ -837,11 +859,11 @@ class ColumnSettingsDialog(QDialog):
                 if preset_name in presets:
                     del presets[preset_name]
                     
-                    with open('column_presets.json', 'w', encoding='utf-8') as f:
-                        json.dump(presets, f, ensure_ascii=False, indent=2)
+                with open('column_presets.json', 'w', encoding='utf-8') as f:
+                    json.dump(presets, f, ensure_ascii=False, indent=2)
                     
-                    self.load_presets()
-                    self.preset_combo.setCurrentText("")
+                self.load_presets()
+                self.preset_combo.setCurrentText("")
             except FileNotFoundError:
                 pass
 
@@ -934,13 +956,9 @@ class ColumnSettingsDialog(QDialog):
 
     def get_settings(self):
         """Get all settings from the dialog"""
-        # Get the merged name default value first
-        merged_default = self.merged_default_value.text().strip()
-        
         settings = {
             'merge_names': self.merge_checkbox.isChecked(),
             'merged_name': self.merged_name_input.text().strip(),
-            'merged_default': merged_default,  # Store this separately
             'column_names': {
                 key: self.column_inputs[key].text().strip() 
                 for key in self.original_columns.keys()
@@ -948,16 +966,29 @@ class ColumnSettingsDialog(QDialog):
             'default_values': {}
         }
         
-        # Handle default values based on merge state
+        # Log current state
+        logging.info("Collecting settings:")
+        
+        # First collect defaults for all standard columns
+        for key in self.original_columns.keys():
+            col_name = self.column_inputs[key].text().strip()
+            default_val = self.default_inputs[key].text().strip()
+            if default_val:  # Only store non-empty defaults
+                settings['default_values'][col_name] = default_val
+                logging.info(f"Added default value for {col_name}: {default_val}")
+        
+        # Add merged name default if merging names
         if settings['merge_names']:
-            settings['default_values'][settings['merged_name']] = merged_default
-        else:
-            # Store individual field defaults
-            for key in self.original_columns.keys():
-                col_name = self.column_inputs[key].text().strip()
-                default_val = self.default_inputs[key].text().strip()
-                if default_val:  # Only store non-empty defaults
-                    settings['default_values'][col_name] = default_val
+            merged_name = settings['merged_name']
+            merged_default = self.merged_default_value.text().strip()
+            if merged_default:
+                settings['default_values'][merged_name] = merged_default
+                # Also store it in merged_default for backward compatibility
+                settings['merged_default'] = merged_default
+                logging.info(f"Added merged name default: {merged_default}")
+            
+            # Add merged name to column names
+            settings['column_names']['Merged'] = merged_name
         
         # Add other settings...
         settings.update({
@@ -993,13 +1024,14 @@ class ColumnSettingsDialog(QDialog):
             }
         })
         
-        # Update region settings to include custom sectors
+        # Update region settings
         if self.use_custom_sectors_checkbox.isChecked():
             settings['region_branch_ids'] = settings['custom_sector_ids']
         
         # Add remove accents option
         settings['remove_accents'] = self.remove_accents_checkbox.isChecked()
         
+        logging.info(f"Final settings: {settings}")
         return settings
 
     def reset_to_defaults(self):
@@ -1363,19 +1395,12 @@ class PDFToExcelGUI(QMainWindow):
 
         self.conversion_thread = ConversionThread(pdf_files, output_dir, merge_files, 
                                                 custom_filename, self.enable_logging)
-        self.conversion_thread.column_names = self.column_names
+        
+        # Add these lines to pass the name merge settings
         self.conversion_thread.merge_names = self.merge_names
         self.conversion_thread.merged_name = self.merged_name
-        if self.merge_names:
-            self.conversion_thread.default_values = {
-                self.merged_name: self.default_values.get(self.merged_name, "À l'occupant")
-            }
-        else:
-            self.conversion_thread.default_values = {
-                k: v for k, v in self.default_values.items() 
-                if k in self.column_names.values()
-            }
-        self.conversion_thread.file_format = file_format
+        self.conversion_thread.column_names = self.column_names
+        self.conversion_thread.default_values = self.default_values
         
         # Add all address merge settings
         self.conversion_thread.merge_address = self.merge_address
@@ -1473,18 +1498,15 @@ class PDFToExcelGUI(QMainWindow):
             self.merged_name = settings['merged_name']
             self.column_names = settings['column_names']
             
-            # Fix default values handling
+            # FIX: Store all default values, not just name-related ones
+            self.default_values = settings['default_values']
+            
+            # If merging names, ensure the merged name default is set
             if self.merge_names:
-                # When merging names, ensure we store the default value for the merged column
-                self.default_values = {
-                    self.merged_name: settings['default_values'].get(self.merged_name, "À l'occupant")
-                }
-            else:
-                # When using separate fields, store defaults for First/Last name
-                self.default_values = {
-                    self.column_names['First Name']: settings['default_values'].get(self.column_names['First Name'], 'À'),
-                    self.column_names['Last Name']: settings['default_values'].get(self.column_names['Last Name'], "l'occupant")
-                }
+                self.default_values[self.merged_name] = settings['default_values'].get(
+                    self.merged_name, "À l'occupant"
+                )
+            
             self.merge_address = settings['merge_address']
             self.merged_address_name = settings['merged_address_name']
             self.address_separator = settings['address_separator']

@@ -35,6 +35,7 @@ def get_pdf_paths():
     return file_paths
 
 def extract_with_pdfplumber(pdf_path):
+    """Extracts rows from a PDF with columns [centris_no, municipality_borough, address, postal_code]."""
     with pdfplumber.open(pdf_path) as pdf:
         all_data = []
         for page in pdf.pages:
@@ -50,18 +51,17 @@ def extract_with_pdfplumber(pdf_path):
         return pd.DataFrame(all_data, columns=['centris_no', 'municipality_borough', 'address', 'postal_code'])
 
 def extract_apartment(address):
+    """Extract apartment substring (e.g. 'Apt. 101') from an address. Returns (address_without_apt, apartment_text)."""
     if not address:
         return ("", None)
     
-    # Look for apartment indicator
     apt_index = address.lower().find('apt.')
     if apt_index == -1:
         return address, None
         
-    # Split at the comma before apt.
     base_address = address[:apt_index].rstrip(' ,')
     
-    # Find the postal code pattern after apt.
+    # Find a postal code pattern after "apt." to see if we can isolate the apt portion
     postal_pattern = r'[A-Z][0-9][A-Z]\s*[0-9][A-Z][0-9]'
     postal_match = re.search(postal_pattern, address[apt_index:])
     
@@ -70,15 +70,16 @@ def extract_apartment(address):
         apartment = address[apt_index:apt_index + postal_match.start()].strip()
         return base_address, apartment
     else:
-        # If no postal code found (shouldn't happen with our data), take rest of string
+        # If no postal code found, take the rest
         apartment = address[apt_index:].strip()
         return base_address, apartment
 
 def clean_text(text, extract_apt=False, remove_accents=False):
+    """Clean text, optionally remove accents, optionally handle apt extraction (but typically we do that separately)."""
     if not text:
         return ("", None) if extract_apt else ""
     
-    # First clean up any obvious typos where first letter is missing
+    # Fix a few common prefix typos
     common_prefixes = {
         'ue ': 'Rue ',
         'v. ': 'Av. ',
@@ -86,7 +87,6 @@ def clean_text(text, extract_apt=False, remove_accents=False):
         'te ': 'Côte ',
         'l. ': 'Boul. '
     }
-    
     for wrong, correct in common_prefixes.items():
         if text.startswith(wrong):
             text = correct + text[len(wrong):]
@@ -94,45 +94,151 @@ def clean_text(text, extract_apt=False, remove_accents=False):
     
     # Remove everything from the first opening parenthesis onwards
     cleaned = re.sub(r'\s*\(.*$', '', text)
-    
+
     if extract_apt:
-        # Extract apartment number and clean the address
+        # Extract apartment number and clean address
         cleaned, apartment = extract_apartment(cleaned)
-        # Clean up any remaining trailing punctuation
-        cleaned = re.sub(r'[\s\-,]+(?<!E)(?<!O)\.?$', '', cleaned)
-        cleaned = cleaned.strip()
-        
-        # Add accent removal if enabled
+        cleaned = re.sub(r'[\s\-,]+(?<!E)(?<!O)\.?$', '', cleaned).strip()
         if remove_accents:
             cleaned = unidecode(cleaned)
             if apartment:
                 apartment = unidecode(apartment)
-                
         return cleaned, apartment
-    else:
-        # When not extracting apartments, preserve the original address format
-        cleaned = re.sub(r'[\s\-,]+(?<!E)(?<!O)\.?$', '', cleaned)
-        cleaned = cleaned.strip()
-        
-        # Add accent removal if enabled
-        if remove_accents:
-            cleaned = unidecode(cleaned)
-            
-        return cleaned
+    
+    # Not extracting apt
+    cleaned = re.sub(r'[\s\-,]+(?<!E)(?<!O)\.?$', '', cleaned).strip()
+    if remove_accents:
+        cleaned = unidecode(cleaned)
+    return cleaned
 
-def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False, 
-                merged_name="Full Name", default_values=None, file_format='xlsx',
-                output_dir=None, custom_filename=None, merge_address=False,
-                merged_address_name="Complete Address", address_separator=", ",
-                province_default="QC", should_extract_apartment=False, 
-                apartment_column_name="Apartment", filter_apartments=False, 
-                include_apartment_column=True, include_phone=False, phone_default="", 
-                include_date=False, date_value=None, filter_by_region=False, 
-                region_branch_ids=None, use_custom_sectors=False, remove_accents=False):
+def add_name_columns_to_df(
+    df,
+    merge_names,
+    merged_name,
+    column_names,
+    default_values,
+    remove_accents
+):
+    """
+    Adds name columns (merged or separate) to the DataFrame `df`.
     
+    - If `merge_names` is True:
+       * Creates one column (e.g., 'Full Name') and places it first.
+       * If DF doesn't have 'First Name'/'Last Name', uses default occupant name.
+    - Else:
+       * Creates separate 'First Name' and 'Last Name' columns (or uses defaults),
+         and places them first in order (First Name, Last Name).
+    - Also removes accents if `remove_accents` is True.
+    
+    Returns a new DataFrame that includes existing df columns plus the name columns.
+    """
+    if df is None or df.empty:
+        return df
+    
+    df = df.copy()  # work on a copy
+    base_length = len(df)
+    
+    if merge_names:
+        # Merge both into a single column
+        if 'First Name' in df.columns and 'Last Name' in df.columns:
+            merged_col = (df['First Name'].fillna('') + ' ' + df['Last Name'].fillna('')).str.strip()
+            df[merged_name] = merged_col
+        else:
+            # If we don't have those columns, use default occupant
+            default_full_name = default_values.get(merged_name, "À l'occupant")
+            df[merged_name] = [default_full_name]*base_length
+        
+        # Remove accents from merged_name column if needed
+        if remove_accents:
+            df[merged_name] = df[merged_name].astype(str).apply(lambda x: unidecode(x))
+        
+        # (NEW) Reorder so that merged_name is the first column
+        cols = df.columns.tolist()
+        if merged_name in cols:
+            cols.remove(merged_name)
+            cols.insert(0, merged_name)
+        df = df[cols]
+    
+    else:
+        # Separate columns for First & Last
+        fn_key = 'First Name'
+        ln_key = 'Last Name'
+        # The user might have given custom labels in column_names
+        col_first = column_names.get(fn_key, fn_key)
+        col_last = column_names.get(ln_key, ln_key)
+
+        # If "First Name" isn't physically in df, create it with a default
+        if fn_key not in df.columns:
+            default_fn = default_values.get(col_first, "À l'occupant")
+            df[col_first] = [default_fn]*base_length
+        else:
+            # rename in case user changed "First Name" => "Prénom"
+            df.rename(columns={fn_key: col_first}, inplace=True)
+            default_fn = default_values.get(col_first, "À l'occupant")
+            df[col_first] = df[col_first].fillna(default_fn)
+        
+        # If "Last Name" isn't physically in df, create it with a default
+        if ln_key not in df.columns:
+            default_ln = default_values.get(col_last, "")
+            df[col_last] = [default_ln]*base_length
+        else:
+            # rename in case user changed "Last Name" => "Nom"
+            df.rename(columns={ln_key: col_last}, inplace=True)
+            default_ln = default_values.get(col_last, "")
+            df[col_last] = df[col_last].fillna(default_ln)
+
+        # Remove accents if needed
+        if remove_accents:
+            df[col_first] = df[col_first].astype(str).apply(lambda x: unidecode(x))
+            df[col_last] = df[col_last].astype(str).apply(lambda x: unidecode(x))
+        
+        # (NEW) Reorder so that First Name, Last Name are the first columns
+        cols = df.columns.tolist()
+        # move col_first to front if it exists
+        if col_first in cols:
+            cols.remove(col_first)
+            cols.insert(0, col_first)
+        # move col_last to second
+        if col_last in cols:
+            cols.remove(col_last)
+            cols.insert(1, col_last)
+        df = df[cols]
+    
+    return df
+
+def process_pdfs(
+    pdf_paths,
+    merge=False,
+    column_names=None,
+    merge_names=False, 
+    merged_name="Full Name",
+    default_values=None,
+    file_format='xlsx',
+    output_dir=None,
+    custom_filename=None,
+    merge_address=False,
+    merged_address_name="Complete Address",
+    address_separator=", ",
+    province_default="QC",
+    should_extract_apartment=False, 
+    apartment_column_name="Apartment",
+    filter_apartments=False, 
+    include_apartment_column=True, 
+    include_phone=False, 
+    phone_default="", 
+    include_date=False, 
+    date_value=None, 
+    filter_by_region=False, 
+    region_branch_ids=None, 
+    use_custom_sectors=False, 
+    remove_accents=False
+):
+    """
+    Main logic that processes PDF(s) and returns a list of DataFrames.
+    Each DataFrame corresponds to one PDF, unless `merge` is True (then it might behave differently).
+    """
     logging.info(f"process_pdfs remove_accents setting: {remove_accents}")
-    
-    # Define clean_accents function with logging
+
     def clean_accents(text):
         if isinstance(text, str) and remove_accents:
             cleaned = unidecode(text)
@@ -140,10 +246,7 @@ def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False,
                 logging.info(f"Cleaned text: '{text}' -> '{cleaned}'")
             return cleaned
         return text
-    
-    # Add logging for remove_accents flag
-    logging.info(f"Remove accents setting: {remove_accents}")
-    
+
     if column_names is None:
         column_names = {
             'First Name': 'First Name',
@@ -153,346 +256,293 @@ def process_pdfs(pdf_paths, merge=False, column_names=None, merge_names=False,
             'Province': 'Province',
             'Postal Code': 'Postal Code'
         }
-    
     if default_values is None:
         default_values = {}
 
     current_time = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     all_dfs = []
+
     for pdf_path in pdf_paths:
         logging.info(f"Processing PDF: {pdf_path}")
         df = extract_with_pdfplumber(pdf_path)
         logging.info(f"Extracted {len(df)} rows from {pdf_path}")
         
-        # Data validation and cleaning
-        df['municipality_borough'] = df['municipality_borough'].apply(lambda x: x.split('(')[0].strip())
+        # Clean up the city/municipality
+        df['municipality_borough'] = df['municipality_borough'].apply(lambda x: x.split('(')[0].strip() if x else x)
         
-        # Just clean up any extra whitespace
-        df['address'] = df['address'].apply(lambda x: x.strip())
-        df['address'] = df.apply(lambda row: row['address'] if row['address'].strip() else f"{row['municipality_borough']} {row['address']}", axis=1)
+        # Trim addresses
+        df['address'] = df['address'].apply(lambda x: x.strip() if x else x)
+        df['address'] = df.apply(
+            lambda row: row['address'] if row['address'] and row['address'].strip() else f"{row['municipality_borough']} {row['address']}",
+            axis=1
+        )
         
-        # Initialize output_data dictionary
-        output_data = {}
-        
-        # Add debug logging at the start
         logging.info("PDF Processing Settings:")
         logging.info(f"use_custom_sectors = {use_custom_sectors}")
         logging.info(f"filter_by_region = {filter_by_region}")
         logging.info(f"region_branch_ids = {region_branch_ids}")
-        
+
+        # Possibly filter by region
         if filter_by_region or use_custom_sectors:
-            filtered_df = pd.DataFrame()
-            logging.info(f"Starting filtering with {len(df)} rows")
-            logging.info(f"Filtering mode: use_custom_sectors={use_custom_sectors}, filter_by_region={filter_by_region}")
-            logging.info(f"Region branch IDs: {region_branch_ids}")
-            
-            # Start with empty DataFrame
             filtered_df = pd.DataFrame(columns=df.columns)
             
             for idx, row in df.iterrows():
                 city = row['municipality_borough']
                 
                 if use_custom_sectors:
-                    # Use custom sector filtering
+                    # custom sector filtering
                     sector = get_custom_sector(city, row['postal_code'])
-                    logging.info(f"Checking city '{city}' and postal code '{row['postal_code']}' for custom sector: {sector}")
-                    # Only include if sector is in region_branch_ids
                     if sector and sector in region_branch_ids:
                         row_df = pd.DataFrame([row])
                         row_df['Branch ID'] = region_branch_ids[sector]
-                        filtered_df = pd.concat([filtered_df, row_df])
+                        filtered_df = pd.concat([filtered_df, row_df], ignore_index=True)
                         logging.info(f"Added to custom sector {sector}: {city} ({row['postal_code']})")
                     else:
                         logging.info(f"Skipping city not in selected sectors: {city} ({row['postal_code']})")
-                elif filter_by_region:  # Only do regular region filtering if not using custom sectors
+                else:
+                    # standard region filtering
                     region = get_shore_region(city)
-                    logging.info(f"City: {city} -> Region: {region}")
                     branch_id = region_branch_ids.get(f'flyer_{region}', region_branch_ids.get('flyer_unknown', 'unknown'))
-                    logging.info(f"Branch ID resolved to: {branch_id}")
                     if branch_id != 'unknown':
                         row_df = pd.DataFrame([row])
                         row_df['Branch ID'] = branch_id
-                        filtered_df = pd.concat([filtered_df, row_df])
+                        filtered_df = pd.concat([filtered_df, row_df], ignore_index=True)
             
-            # After filtering, replace original df with filtered one
             if len(filtered_df) > 0:
-                df = filtered_df.copy()  # Make sure to create a copy
-                output_data['Branch ID'] = df['Branch ID'].tolist()
-                logging.info(f"Filtered to {len(df)} rows from {len(filtered_df)} matches")
+                df = filtered_df.copy()
             else:
-                logging.error("No valid cities found after filtering")
-                return [pd.DataFrame()]
-        
-        # Handle name fields AFTER filtering the DataFrame
+                logging.error("No valid cities found after filtering.")
+                # Return an empty DF so we don't break downstream steps
+                all_dfs.append(pd.DataFrame())
+                continue  # move on to next PDF
+
+        output_df_final = None  # We'll store the final DF for this PDF
+
+        # -----------------------------------------------------------------
+        # (A) MERGE_ADDRESS = True
+        # -----------------------------------------------------------------
         if merge_address:
             merged_addresses = []
             apartments = []
-            branch_ids = []  # Add list to store branch IDs
+            branch_ids = []
             valid_indices = []
-            
+
             for idx, row in df.iterrows():
                 if should_extract_apartment:
-                    logging.info(f"Processing address: {row['address']}")
                     clean_addr, apt = extract_apartment(row['address'])
-                    logging.info(f"Extracted: Address='{clean_addr}', Apartment='{apt}'")
                     
-                    # First check if we should filter out this address
                     if filter_apartments and apt is not None:
-                        logging.info(f"Filtering out address with apartment: {row['address']} (apt: {apt})")
+                        # skipping addresses with apartments
+                        logging.info(f"Filtering out address with apartment: {row['address']} (apt={apt})")
                         continue
                     
-                    # If we get here, either filtering is off or this address has no apartment
                     address_parts = [
-                        clean_addr,
-                        row['municipality_borough'],
+                        clean_addr.strip() if clean_addr else "",
+                        row['municipality_borough'].strip() if row['municipality_borough'] else "",
                         province_default,
                         row['postal_code']
                     ]
                     merged_address = address_separator.join(filter(None, address_parts))
                     
-                    # Check for duplicates before adding
                     if merged_address not in merged_addresses:
                         merged_addresses.append(merged_address)
-                        # Store Branch ID if it exists
                         if 'Branch ID' in row:
                             branch_ids.append(row['Branch ID'])
-                            logging.info(f"Storing Branch ID: {row['Branch ID']} for address: {merged_address}")
                         if include_apartment_column and not filter_apartments:
                             apartments.append(apt)
                         valid_indices.append(idx)
                     else:
-                        logging.info(f"Skipping duplicate address: {merged_address}")
+                        logging.info(f"Skipping duplicate merged address: {merged_address}")
                 
                 else:
-                    # Non-apartment extraction case
+                    # Non-apartment extraction
                     if filter_apartments:
+                        # Even if we're not extracting apt, check for "apt."
                         _, apt = extract_apartment(row['address'])
                         if apt is not None:
                             logging.info(f"Filtering out address with apartment: {row['address']}")
                             continue
                     
-                    clean_addr = clean_text(row['address'], extract_apt=should_extract_apartment, remove_accents=remove_accents)
+                    # Just clean the address for final
+                    plain_addr = clean_text(row['address'], extract_apt=False, remove_accents=remove_accents)
                     address_parts = [
-                        clean_addr,
+                        plain_addr,
                         row['municipality_borough'],
                         province_default,
                         row['postal_code']
                     ]
-                    merged_address = address_separator.join(filter(None, address_parts))
+                    merged_address = address_separator.join(filter(None, address_parts)).strip()
                     
-                    # Check for duplicates before adding
                     if merged_address not in merged_addresses:
                         merged_addresses.append(merged_address)
-                        # Store Branch ID if it exists
                         if 'Branch ID' in row:
                             branch_ids.append(row['Branch ID'])
-                            logging.info(f"Storing Branch ID: {row['Branch ID']} for address: {merged_address}")
                         valid_indices.append(idx)
                     else:
-                        logging.info(f"Skipping duplicate address: {merged_address}")
-            
-            # After merging addresses, create output_data ONCE
+                        logging.info(f"Skipping duplicate merged address: {merged_address}")
+
             if valid_indices:
-                logging.info(f"Filtering DataFrame to {len(valid_indices)} valid entries")
-                df = df.loc[valid_indices].copy()
-                base_length = len(df)
-                logging.info(f"Creating output data with base length: {base_length}")
+                df_filtered = df.loc[valid_indices].copy()
+                base_length = len(df_filtered)
                 
+                # Build the partial output_data
                 output_data = {}
-                
-                # Add Branch IDs first if they exist
-                if branch_ids:
+
+                # Insert region/branch if it existed
+                if 'Branch ID' in df_filtered.columns:
+                    output_data['Branch ID'] = df_filtered['Branch ID'].tolist()
+                elif branch_ids:
                     output_data['Branch ID'] = branch_ids[:base_length]
-                    logging.info(f"Added {len(branch_ids)} Branch IDs to output")
-                elif filter_by_region and 'Branch ID' in df.columns:
-                    output_data['Branch ID'] = df['Branch ID'].tolist()[:base_length]
-                    logging.info("Added Branch IDs from DataFrame")
                 
-                # Add other data with accent cleaning
-                if merge_names:
-                    original = default_values.get(merged_name, "À l'occupant")
-                    cleaned = clean_accents(original)
-                    logging.info(f"Merged name default value: '{original}' -> '{cleaned}'")
-                    output_data[merged_name] = [cleaned] * base_length
-                else:
-                    output_data[column_names['First Name']] = [clean_accents(default_values.get(column_names['First Name'], 'À'))] * base_length
-                    output_data[column_names['Last Name']] = [clean_accents(default_values.get(column_names['Last Name'], "l'occupant"))] * base_length
-                
-                # Log address cleaning
-                logging.info("Cleaning addresses:")
-                for i, addr in enumerate(merged_addresses[:base_length]):
-                    cleaned = clean_accents(addr)
-                    if cleaned != addr:
-                        logging.info(f"Address {i}: '{addr}' -> '{cleaned}'")
-                output_data[merged_address_name] = [clean_accents(addr) for addr in merged_addresses[:base_length]]
-                
-                if include_apartment_column and not filter_apartments:
-                    output_data[apartment_column_name] = [clean_accents(apt) for apt in apartments[:base_length]]
-                
-                if include_phone:
-                    output_data['Phone'] = [clean_accents(phone_default)] * base_length
-                
-                if include_date:
-                    output_data['Date'] = [date_value] * base_length  # Don't clean date values
-                
-                # Log final output data
-                logging.info("Final output_data sample:")
-                for key in output_data:
-                    if isinstance(output_data[key], list) and output_data[key]:
-                        logging.info(f"{key}: First value = '{output_data[key][0]}'")
-                
-                # Remove accents if enabled
-                if remove_accents:
-                    logging.info("Removing accents from output data")
-                    for key in output_data:
-                        if isinstance(output_data[key], list):
-                            output_data[key] = [clean_accents(val) for val in output_data[key]]
-                            logging.info(f"Removed accents from column: {key}")
+                # Insert the merged address
+                cleaned_merged_addresses = []
+                for addr in merged_addresses[:base_length]:
+                    if remove_accents:
+                        cleaned_merged_addresses.append(unidecode(addr))
+                    else:
+                        cleaned_merged_addresses.append(addr)
+                output_data[merged_address_name] = cleaned_merged_addresses
 
-                # Verify array lengths before creating DataFrame
-                lengths = {k: len(v) for k, v in output_data.items()}
-                logging.info(f"Column lengths before DataFrame creation: {lengths}")
-                if len(set(lengths.values())) > 1:
-                    logging.error(f"Mismatched column lengths detected: {lengths}")
-                    # Ensure all arrays match base_length
-                    for key in output_data:
-                        if len(output_data[key]) != base_length:
-                            logging.warning(f"Adjusting length of {key} from {len(output_data[key])} to {base_length}")
-                            if len(output_data[key]) > base_length:
-                                output_data[key] = output_data[key][:base_length]
-                            else:
-                                output_data[key].extend([None] * (base_length - len(output_data[key])))
-
-                # Create DataFrame after all processing
-                output_df = pd.DataFrame(output_data)
-                logging.info(f"Final DataFrame shape: {output_df.shape}")
-                all_dfs.append(output_df)
+                partial_df = pd.DataFrame(output_data)
+                output_df_final = partial_df
+            else:
+                # No valid addresses after filtering
+                output_df_final = pd.DataFrame()
         
+        # -----------------------------------------------------------------
+        # (B) MERGE_ADDRESS = False
+        # -----------------------------------------------------------------
         else:
-            if should_extract_apartment:
-                cleaned_addresses = []
-                apartments = []
-                valid_indices = []
-                
-                for idx, addr in enumerate(df['address']):
-                    clean_addr, apt = clean_text(addr, extract_apt=True, remove_accents=remove_accents)
+            valid_indices = []
+            cleaned_addresses = []
+            apartments = []
+
+            for idx, row in df.iterrows():
+                if should_extract_apartment:
+                    clean_addr, apt = clean_text(row['address'], extract_apt=True, remove_accents=remove_accents)
                     
-                    # First check if we should filter out this address
                     if filter_apartments and apt is not None:
-                        logging.info(f"Filtering out address with apartment: {addr}")
+                        logging.info(f"Filtering out address with apartment: {row['address']}")
                         continue
                     
-                    # If we get here, either filtering is off or this address has no apartment
                     cleaned_addresses.append(clean_addr)
-                    
-                    # Only add apartment info if we're extracting but not filtering
                     if include_apartment_column and not filter_apartments:
                         apartments.append(apt)
                     valid_indices.append(idx)
+                
+                else:
+                    if filter_apartments:
+                        # even if not extracting apt explicitly, check it
+                        _, apt = extract_apartment(row['address'])
+                        if apt is not None:
+                            logging.info(f"Filtering out address with apartment: {row['address']}")
+                            continue
+                    # normal cleaning
+                    plain_addr = clean_text(row['address'], extract_apt=False, remove_accents=remove_accents)
+                    cleaned_addresses.append(plain_addr)
+                    valid_indices.append(idx)
             
-                # Filter the DataFrame to only include valid rows
-                if valid_indices:
-                    df = df.iloc[valid_indices].copy()
-                    # Ensure all arrays match the filtered DataFrame length
-                    cleaned_addresses = cleaned_addresses[:len(df)]
-                    if include_apartment_column:
-                        apartments = apartments[:len(df)]
-                
-                output_data.update({
-                    column_names['Address']: cleaned_addresses,
-                    column_names['City']: df['municipality_borough'].tolist(),
-                    column_names['Province']: [default_values.get(column_names['Province'], '')] * len(df),
-                    column_names['Postal Code']: df['postal_code'].tolist()
-                })
-                
-                if include_apartment_column:
-                    output_data[apartment_column_name] = apartments
-            else:
-                # Just pass through addresses without any apartment processing
-                output_data.update({
-                    column_names['Address']: df['address'].apply(lambda x: clean_text(x, extract_apt=False, remove_accents=remove_accents)),
-                    column_names['City']: df['municipality_borough'],
-                    column_names['Province']: default_values.get(column_names['Province'], ''),
-                    column_names['Postal Code']: df['postal_code']
-                })
-        
-        # Add phone number if enabled
-        if include_phone:
-            output_data[column_names.get('Phone', 'Phone')] = [phone_default] * len(df)
-        
-        # Add date if enabled
-        if include_date:
-            output_data[column_names.get('Date', 'Date')] = [date_value] * len(df)
-        
-        # Create output DataFrame with all data
-        output_df = pd.DataFrame(output_data)
-        
-        # Clean up address if city is included (do this before sorting)
-        if not merge_address:
+            df_filtered = df.iloc[valid_indices].copy()
+            output_data = {}
+            output_data[column_names['Address']] = cleaned_addresses
+            output_data[column_names['City']] = df_filtered['municipality_borough'].tolist()
+            output_data[column_names['Province']] = [
+                default_values.get(column_names['Province'], province_default)
+            ] * len(df_filtered)
+            output_data[column_names['Postal Code']] = df_filtered['postal_code'].tolist()
+            
+            if 'Branch ID' in df_filtered.columns:
+                output_data['Branch ID'] = df_filtered['Branch ID'].tolist()
+
+            if include_apartment_column and not filter_apartments and should_extract_apartment:
+                output_data[apartment_column_name] = apartments
+            
+            partial_df = pd.DataFrame(output_data)
+
+            # Remove city duplication from address if it starts with city
             address_col = column_names['Address']
             city_col = column_names['City']
-            output_df[address_col] = output_df.apply(
-                lambda row: row[address_col].replace(row[city_col], '', 1).strip() 
-                if row[address_col].startswith(row[city_col]) else row[address_col], 
-                axis=1
-            )
-        
-        # Update the sorting logic
-        if filter_by_region and 'Branch ID' in output_df.columns:
-            sort_columns = ['Branch ID']
-            if merge_address:
-                if merged_address_name in output_df.columns:
-                    sort_columns.append(merged_address_name)
-            else:
-                # Check if columns exist in the DataFrame
-                city_col = column_names.get('City')
-                addr_col = column_names.get('Address')
-                
-                if city_col and city_col in output_df.columns:
-                    sort_columns.append(city_col)
-                if addr_col and addr_col in output_df.columns:
-                    sort_columns.append(addr_col)
+            if address_col in partial_df.columns and city_col in partial_df.columns:
+                partial_df[address_col] = partial_df.apply(
+                    lambda row: row[address_col].replace(row[city_col], '', 1).strip()
+                    if row[address_col].startswith(row[city_col]) else row[address_col],
+                    axis=1
+                )
             
-            if len(sort_columns) > 0:
-                output_df = output_df.sort_values(sort_columns)
-                logging.info(f"Sorting by columns: {sort_columns}")
+            output_df_final = partial_df
+
+        # -----------------------------------------------------------------
+        # COMMON STEP: Add NAME columns (merged or not) at front
+        # -----------------------------------------------------------------
+        if output_df_final is not None and not output_df_final.empty:
+            output_df_final = add_name_columns_to_df(
+                df=output_df_final,
+                merge_names=merge_names,
+                merged_name=merged_name,
+                column_names=column_names,
+                default_values=default_values,
+                remove_accents=remove_accents
+            )
+
+            # Handle phone
+            if include_phone:
+                phone_col = column_names.get('Phone', 'Phone')
+                output_df_final[phone_col] = [phone_default]*len(output_df_final)
+
+            # Handle date
+            if include_date:
+                date_col = column_names.get('Date', 'Date')
+                output_df_final[date_col] = [date_value]*len(output_df_final)
+
+            # Final sorting
+            if filter_by_region and 'Branch ID' in output_df_final.columns:
+                sort_columns = ['Branch ID']
+                if merge_address and merged_address_name in output_df_final.columns:
+                    sort_columns.append(merged_address_name)
+                else:
+                    if column_names['City'] in output_df_final.columns:
+                        sort_columns.append(column_names['City'])
+                    if column_names['Address'] in output_df_final.columns:
+                        sort_columns.append(column_names['Address'])
+                output_df_final = output_df_final.sort_values(sort_columns)
             else:
-                logging.warning("No valid sort columns found")
+                sort_column = merged_address_name if merge_address else column_names.get('City')
+                if sort_column and sort_column in output_df_final.columns:
+                    output_df_final = output_df_final.sort_values(by=sort_column)
         else:
-            # Check which column to sort by
-            sort_column = merged_address_name if merge_address else column_names.get('City')
-            if sort_column and sort_column in output_df.columns:
-                output_df = output_df.sort_values(by=sort_column)
-                logging.info(f"Sorting by column: {sort_column}")
-            else:
-                logging.warning(f"Sort column '{sort_column}' not found in DataFrame. Skipping sort.")
-        
-        logging.info(f"Processed {len(output_df)} rows for {pdf_path}")
-        all_dfs.append(output_df)
-    
+            output_df_final = pd.DataFrame()
+
+        logging.info(f"Processed {len(output_df_final)} rows for {pdf_path}")
+        all_dfs.append(output_df_final)
+
     return all_dfs
 
 def save_to_excel(dfs, pdf_paths, merge=False):
+    """Provided utility to save output as Excel; not heavily changed."""
     current_time = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     
     if merge:
+        # Merged file logic
         output_filename = f'output_excel/merged_output_{current_time}.xlsx'
-        dfs.sort_values('City', inplace=True)
-        dfs.to_excel(output_filename, index=False)
+        merged_df = pd.concat(dfs, ignore_index=True)
+        if 'City' in merged_df.columns:
+            merged_df.sort_values('City', inplace=True)
+        merged_df.to_excel(output_filename, index=False)
         auto_adjust_columns(output_filename)
         print(f"Merged Excel file '{output_filename}' has been created successfully.")
     else:
+        # One file per DF
         for df, pdf_path in zip(dfs, pdf_paths):
             output_filename = f'output_excel/{os.path.splitext(os.path.basename(pdf_path))[0]}_{current_time}.xlsx'
-            df.sort_values('City', inplace=True)
+            if 'City' in df.columns:
+                df.sort_values('City', inplace=True)
             df.to_excel(output_filename, index=False)
             auto_adjust_columns(output_filename)
             print(f"Excel file '{output_filename}' has been created successfully.")
 
 def auto_adjust_columns(filename, df=None):
-    """Auto-adjust column widths for Excel files or format CSV content"""
+    """Auto-adjust column widths for Excel or format CSV content if needed."""
     if filename.endswith('.xlsx'):
-        # Excel file adjustment
         workbook = load_workbook(filename)
         worksheet = workbook.active
 
@@ -505,54 +555,68 @@ def auto_adjust_columns(filename, df=None):
                         max_length = len(cell.value)
                 except:
                     pass
-            adjusted_width = (max_length + 2) * 1.2  # Multiply by 1.2 for better fit
+            adjusted_width = (max_length + 2) * 1.2
             worksheet.column_dimensions[column_letter].width = adjusted_width
 
         workbook.save(filename)
     
     elif filename.endswith('.csv') and df is not None:
-        # For CSV, format the DataFrame before saving
+        # For CSV, we can left-pad or just return the same df
         formatted_df = df.copy()
-        
-        # Calculate max width for each column
         max_lengths = {}
         for column in formatted_df.columns:
-            # Get max length including header
             max_lengths[column] = max(
                 formatted_df[column].astype(str).str.len().max(),
                 len(str(column))
             )
-        
-        # Format each column with consistent width
         for column in formatted_df.columns:
             width = max_lengths[column]
             formatted_df[column] = formatted_df[column].astype(str).str.ljust(width)
-        
         return formatted_df
 
-def convert_pdf_to_excel(pdf_files, output_dir, merge_files=False, custom_filename=None, 
-                        enable_logging=False, column_names=None, merge_names=False, 
-                        merged_name="Full Name", default_values=None, file_format='xlsx',
-                        merge_address=False, merged_address_name="Complete Address",
-                        address_separator=", ", province_default="QC",
-                        should_extract_apartment=False, apartment_column_name="Apartment",
-                        filter_apartments=False, include_apartment_column=True,
-                        include_phone=False, phone_default="",
-                        include_date=False, date_value=None,
-                        filter_by_region=False, region_branch_ids=None,
-                        use_custom_sectors=False, remove_accents=False):
+def convert_pdf_to_excel(
+    pdf_files,
+    output_dir,
+    merge_files=False,
+    custom_filename=None, 
+    enable_logging=False,
+    column_names=None,
+    merge_names=False, 
+    merged_name="Full Name",
+    default_values=None,
+    file_format='xlsx',
+    merge_address=False,
+    merged_address_name="Complete Address",
+    address_separator=", ",
+    province_default="QC",
+    should_extract_apartment=False,
+    apartment_column_name="Apartment",
+    filter_apartments=False,
+    include_apartment_column=True,
+    include_phone=False,
+    phone_default="",
+    include_date=False,
+    date_value=None,
+    filter_by_region=False,
+    region_branch_ids=None,
+    use_custom_sectors=False,
+    remove_accents=False
+):
+    """
+    High-level function that calls process_pdfs() and then writes outputs.
+    Yields progress or a final filename.
+    """
     logging.info(f"Starting conversion with remove_accents={remove_accents}")
     
     pdf_paths = [pdf_files] if isinstance(pdf_files, str) else pdf_files
     total_files = len(pdf_paths)
     
-    # Create a set to track unique addresses across all files
     all_unique_addresses = set()
     all_data = []
     
     for i, pdf_path in enumerate(pdf_paths):
         dfs = process_pdfs(
-            [pdf_path], 
+            [pdf_path],
             merge=False,
             column_names=column_names,
             merge_names=merge_names,
@@ -579,74 +643,63 @@ def convert_pdf_to_excel(pdf_files, output_dir, merge_files=False, custom_filena
             remove_accents=remove_accents
         )
         
+        # If merging all files into one, gather them
         if merge_files:
-            # For each DataFrame in the results
             for df in dfs:
                 if merged_address_name in df.columns:
-                    # Get mask of unique addresses
                     unique_mask = ~df[merged_address_name].isin(all_unique_addresses)
-                    # Update our set of unique addresses
                     all_unique_addresses.update(df[merged_address_name][unique_mask])
-                    # Only keep rows with unique addresses
                     df_unique = df[unique_mask].copy()
                     if not df_unique.empty:
                         all_data.append(df_unique)
                 else:
+                    # no merged_address_name column => just add
                     all_data.append(df)
         else:
+            # If not merging, just store them individually
             all_data.extend(dfs)
         
         progress = int((i + 1) / total_files * 90)
         yield progress
-    
+
     current_time = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     if merge_files:
         if all_data:
             merged_df = pd.concat(all_data, ignore_index=True)
-            
-            # Format date column if it exists
             if include_date and 'Date' in merged_df.columns:
                 merged_df['Date'] = pd.to_datetime(merged_df['Date']).dt.strftime('%Y-%m-%d')
             
-            # Remove apartment column if not included
             if should_extract_apartment and not include_apartment_column and apartment_column_name in merged_df.columns:
-                merged_df = merged_df.drop(columns=[apartment_column_name])
-            
-            # Sort by Branch ID first if region filtering is enabled
+                merged_df.drop(columns=[apartment_column_name], inplace=True, errors='ignore')
+
+            # Sort if filter_by_region
             if filter_by_region and 'Branch ID' in merged_df.columns:
-                sort_columns = ['Branch ID']
+                sort_cols = ['Branch ID']
                 if merge_address and merged_address_name in merged_df.columns:
-                    sort_columns.append(merged_address_name)
-                elif not merge_address:
+                    sort_cols.append(merged_address_name)
+                else:
                     city_col = column_names.get('City')
                     addr_col = column_names.get('Address')
                     if city_col and city_col in merged_df.columns:
-                        sort_columns.append(city_col)
+                        sort_cols.append(city_col)
                     if addr_col and addr_col in merged_df.columns:
-                        sort_columns.append(addr_col)
-                
-                if len(sort_columns) > 0:
-                    merged_df = merged_df.sort_values(sort_columns)
-                    logging.info(f"Sorting merged DataFrame by columns: {sort_columns}")
+                        sort_cols.append(addr_col)
+                merged_df = merged_df.sort_values(sort_cols)
             else:
-                # Original sorting logic
+                # normal sort
                 sort_column = merged_address_name if merge_address else column_names.get('City')
                 if sort_column and sort_column in merged_df.columns:
                     merged_df = merged_df.sort_values(by=sort_column)
-                    logging.info(f"Sorting merged DataFrame by column: {sort_column}")
-                else:
-                    logging.warning(f"Sort column '{sort_column}' not found in merged DataFrame. Skipping sort.")
             
             if custom_filename:
                 output_filename = os.path.join(output_dir, f'{custom_filename}.{file_format}')
             else:
                 output_filename = os.path.join(output_dir, f'merged_output_{current_time}.{file_format}')
             
-            logging.info(f"Attempting to save merged file: {output_filename}")
             if file_format == 'xlsx':
                 merged_df.to_excel(output_filename, index=False)
                 auto_adjust_columns(output_filename)
-            else:  # CSV format
+            else:
                 formatted_df = auto_adjust_columns(output_filename, merged_df)
                 formatted_df.to_csv(output_filename, index=False, encoding='utf-8-sig')
             
@@ -654,7 +707,6 @@ def convert_pdf_to_excel(pdf_files, output_dir, merge_files=False, custom_filena
     else:
         last_file = None
         for i, df in enumerate(all_data):
-            # Format date column if it exists
             if include_date and 'Date' in df.columns:
                 df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
             
@@ -663,30 +715,30 @@ def convert_pdf_to_excel(pdf_files, output_dir, merge_files=False, custom_filena
             else:
                 base_name = os.path.splitext(os.path.basename(pdf_paths[i]))[0]
                 output_filename = os.path.join(output_dir, f'{base_name}_{current_time}.{file_format}')
-            
-            # Sort by Branch ID first if region filtering is enabled
+
+            # sorting
             if filter_by_region and 'Branch ID' in df.columns:
-                if merge_address:
+                if merge_address and merged_address_name in df.columns:
                     df = df.sort_values(['Branch ID', merged_address_name])
                 else:
                     df = df.sort_values(['Branch ID', column_names['City'], column_names['Address']])
             else:
-                sort_column = merged_address_name if merge_address else column_names['City']
-                df = df.sort_values(by=sort_column)
+                sort_col = merged_address_name if merge_address else column_names['City']
+                if sort_col in df.columns:
+                    df = df.sort_values(sort_col)
             
             if file_format == 'xlsx':
                 df.to_excel(output_filename, index=False)
                 auto_adjust_columns(output_filename)
-            else:  # CSV format
+            else:
                 formatted_df = auto_adjust_columns(output_filename, df)
                 formatted_df.to_csv(output_filename, index=False, encoding='utf-8-sig')
             
             last_file = output_filename
-            logging.info(f"Created file: {output_filename}")
-            
+        
         yield last_file
-    
-    yield 100  # Final progress update
+
+    yield 100  # final progress
     logging.info("Conversion complete")
 
 if __name__ == "__main__":
@@ -705,7 +757,7 @@ if __name__ == "__main__":
         merge = input("Do you want to merge the PDFs into a single Excel file? (y/n): ").lower() == 'y'
     logging.info(f"Merge option: {merge}")
     
-    output_dfs = process_pdfs(pdf_paths, merge)
-    save_to_excel(output_dfs, pdf_paths, merge)
+    output_dfs = process_pdfs(pdf_paths, merge=merge)
+    save_to_excel(output_dfs, pdf_paths, merge=merge)
     
     logging.info(f"Conversion complete. Log file: {log_file}")
