@@ -4,9 +4,9 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QPushButton, QListWidget, QFileDialog, QProgressBar, QLabel,
                              QAbstractItemView, QComboBox, QMessageBox, QInputDialog, QLineEdit,
                              QCheckBox, QDialog, QFormLayout, QDialogButtonBox, QFrame, QDateEdit,
-                             QScrollArea)  # Add QScrollArea
+                             QScrollArea, QMenu)  # Add QScrollArea and QMenu
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QUrl, QDate  # Add QDate
-from PyQt5.QtGui import QDragEnterEvent, QDropEvent, QDesktopServices, QPixmap, QPainter, QColor, QFont, QKeyEvent, QIcon
+from PyQt5.QtGui import QDragEnterEvent, QDropEvent, QDesktopServices, QPixmap, QPainter, QColor, QFont, QKeyEvent, QIcon, QCursor
 from pdf2excel import convert_pdf_to_excel, auto_adjust_columns, setup_logging
 import pandas as pd
 from datetime import datetime
@@ -16,7 +16,7 @@ import json
 import ctypes
 from quebec_regions_mapping import get_shore_region, get_custom_sector, POSTAL_CODE_SECTORS
 
-VERSION = "1.5"
+VERSION = "1.7"
 
 # Translations dictionary
 translations = {
@@ -68,7 +68,6 @@ translations = {
         'preset_saved': "Préréglage sauvegardé",
         'select_preset': "Sélectionner préréglage",
         'delete_preset': "Supprimer préréglage",
-        'confirm_delete': "Êtes-vous sûr de vouloir supprimer ce préréglage?",
         'file_format': "Format du fichier",
         'select_format': "Sélectionner le format",
         'excel_format': "Excel (.xlsx)",
@@ -98,6 +97,7 @@ translations = {
         'unknown': "Inconnu",
         'use_custom_sectors': "Utiliser des secteurs personnalisés",
         'remove_accents': "Retirer les accents",
+        'preview_pdf': "Aperçu PDF",
     },
     'English': {
         'window_title': "PDF to Excel Converter",
@@ -177,6 +177,7 @@ translations = {
         'unknown': "Unknown",
         'use_custom_sectors': "Use Custom Sectors",
         'remove_accents': "Remove accented characters",
+        'preview_pdf': "Preview PDF",
     }
 }
 
@@ -192,16 +193,47 @@ class DragDropListWidget(QListWidget):
         # Enable rubber band selection
         self.setSelectionRectVisible(True)
         self.parent = parent  # Store reference to parent
+        self.setStyleSheet("""
+            QListWidget::item:selected {
+                background: #2a82da;
+                color: white;
+            }
+            QListWidget::item:hover {
+                background: #e6e6e6;
+                color: black;
+            }
+            QListWidget::item:selected:hover {
+                background: #3892ea;
+                color: white;
+            }
+        """)
+        self.default_style = self.styleSheet()
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self.show_context_menu)
+        self.context_menu_open = False
+        self.menu_processing = False
 
-    def dragEnterEvent(self, event: QDragEnterEvent):
+    def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
+            self.setStyleSheet(self.default_style + """
+                QListWidget {
+                    border: 2px dashed #2a82da;
+                }
+            """)
             event.accept()
         else:
             event.ignore()
 
-    def dropEvent(self, event: QDropEvent):
-        files = [u.toLocalFile() for u in event.mimeData().urls() if u.toLocalFile().endswith('.pdf')]
-        self.parent.add_new_files(files)  # Use the parent's add_new_files method
+    def dragLeaveEvent(self, event):
+        self.setStyleSheet(self.default_style)
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event):
+        self.setStyleSheet(self.default_style)  # Reset style
+        if event.mimeData().hasUrls():
+            files = [u.toLocalFile() for u in event.mimeData().urls() if u.toLocalFile().endswith('.pdf')]
+            self.parent.add_new_files(files)  # Add the files
+        super().dropEvent(event)  # Keep internal drag-drop functionality
 
     def keyPressEvent(self, event: QKeyEvent):
         if event.key() == Qt.Key_Delete:
@@ -210,6 +242,41 @@ class DragDropListWidget(QListWidget):
             self.selectAll()  # Select all items
         else:
             super().keyPressEvent(event)  # Handle other key events normally
+
+    def show_context_menu(self, position):
+        # Only show context menu if clicking on an item
+        item = self.itemAt(position)
+        if not item:
+            return
+        
+        self.context_menu_open = True
+        self.menu_processing = True  # Set processing flag
+        menu = QMenu()
+        delete_action = None
+        preview_action = None
+        
+        # Only show options if items are selected
+        if self.selectedItems():
+            delete_action = menu.addAction(translations[self.parent.language]['remove_selected'])
+            # Show preview option for any number of selections
+            preview_action = menu.addAction(translations[self.parent.language]['preview_pdf'])
+        
+        # Show menu if we have any actions
+        if menu.actions():
+            action = menu.exec_(self.mapToGlobal(position))
+            if action == delete_action:
+                self.parent.remove_files()
+            elif action == preview_action:
+                # Preview all selected files
+                for selected_item in self.selectedItems():
+                    self.parent.show_file_preview(selected_item)
+        
+        self.context_menu_open = False
+        # Add slight delay before resetting processing flag
+        QTimer.singleShot(100, self.reset_menu_processing)
+
+    def reset_menu_processing(self):
+        self.menu_processing = False
 
 class ConversionThread(QThread):
     progress_update = pyqtSignal(int)
@@ -255,7 +322,6 @@ class ConversionThread(QThread):
                 
             # Initialize logging if enabled
             if self.enable_logging:
-                # Reset any existing handlers
                 logging.getLogger().handlers = []
                 logging.disable(logging.NOTSET)  # Enable logging
                 self.log_file = setup_logging()  # Create new log file
@@ -329,6 +395,7 @@ class ColumnSettingsDialog(QDialog):
     def __init__(self, current_columns, merge_names=False, merged_name="Full Name", default_values=None, parent=None):
         super().__init__(parent)
         self.parent = parent
+        
         self.setWindowTitle(translations[self.parent.language]['column_settings_title'])
         self.setMinimumWidth(500)
         
@@ -830,12 +897,12 @@ class ColumnSettingsDialog(QDialog):
                     if name in saved_presets and saved_presets[name] == settings:
                         self.load_presets()
                         self.preset_combo.setCurrentText(name)
-                        QMessageBox.information(self, "", translations[self.parent.language]['preset_saved'])
+                        self.show_themed_message_box("", translations[self.parent.language]['preset_saved'])
                     else:
                         raise Exception("Verification failed - preset not saved correctly")
             except Exception as e:
                 logging.error(f"Error saving preset: {str(e)}")
-                QMessageBox.warning(self, "Error", f"Failed to save preset: {str(e)}")
+                self.show_themed_message_box("", f"Failed to save preset: {str(e)}")
 
     def delete_preset(self):
         """Delete the selected preset"""
@@ -843,12 +910,11 @@ class ColumnSettingsDialog(QDialog):
         if not preset_name:
             return
             
-        reply = QMessageBox.question(
-            self,
-            "",
+        reply = self.show_themed_message_box(
             translations[self.parent.language]['confirm_delete'],
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
+            translations[self.parent.language]['confirm_delete_msg'],
+            QMessageBox.Question,
+            QMessageBox.Yes | QMessageBox.No
         )
         
         if reply == QMessageBox.Yes:
@@ -1089,6 +1155,14 @@ class ColumnSettingsDialog(QDialog):
                 self.region_inputs[region_key].setText(default_id)
                 self.region_inputs[region_key].setEnabled(False)
 
+    def show_themed_message_box(self, title, text, icon=QMessageBox.Information, buttons=QMessageBox.Ok):
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle(title)
+        msg_box.setText(text)
+        msg_box.setIcon(icon)
+        msg_box.setStandardButtons(buttons)
+        return msg_box.exec_()
+
 class PDFToExcelGUI(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -1188,6 +1262,8 @@ class PDFToExcelGUI(QMainWindow):
         # Buttons
         button_layout = QHBoxLayout()
         self.add_files_btn = QPushButton(translations[self.language]['add_files'])
+        self.add_files_btn.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.add_files_btn.customContextMenuRequested.connect(self.show_recent_files)
         self.remove_files_btn = QPushButton(translations[self.language]['remove_selected'])
         self.convert_btn = QPushButton(translations[self.language]['convert'])
         button_layout.addWidget(self.add_files_btn)
@@ -1214,6 +1290,17 @@ class PDFToExcelGUI(QMainWindow):
         self.add_files_btn.clicked.connect(self.add_files)
         self.remove_files_btn.clicked.connect(self.remove_files)
         self.convert_btn.clicked.connect(self.start_conversion)
+
+        # Add shortcuts
+        self.add_files_btn.setShortcut("Ctrl+O")
+        self.remove_files_btn.setShortcut("Delete")
+        self.convert_btn.setShortcut("Ctrl+R")
+        
+        # Add tooltips
+        self.add_files_btn.setToolTip(f"{translations[self.language]['add_files']} (Ctrl+O)")
+        self.remove_files_btn.setToolTip(f"{translations[self.language]['remove_selected']} (Delete)")
+        self.convert_btn.setToolTip(f"{translations[self.language]['convert']} (Ctrl+R)")
+        self.column_settings_btn.setToolTip(translations[self.language]['column_settings'])
 
     def change_language(self, new_language):
         if new_language != self.language:
@@ -1280,7 +1367,7 @@ class PDFToExcelGUI(QMainWindow):
                             logging.getLogger().handlers = []
                         logging.disable(logging.CRITICAL)
             except Exception as e:
-                QMessageBox.warning(self, "Warning", f"Error setting logging state: {str(e)}")
+                self.show_themed_message_box("Warning", f"Error setting logging state: {str(e)}")
 
     def add_files(self):
         files, _ = QFileDialog.getOpenFileNames(self, translations[self.language]['select_pdf_files'], "", "PDF Files (*.pdf)")
@@ -1339,7 +1426,19 @@ class PDFToExcelGUI(QMainWindow):
         if not output_dir:
             self.status_label.setText(translations[self.language]['operation_cancelled'])
             return
-
+        
+        # Convert to absolute path and ensure it exists
+        output_dir = os.path.abspath(output_dir)
+        if not os.path.exists(output_dir):
+            try:
+                os.makedirs(output_dir)
+            except Exception as e:
+                self.status_label.setText(f"Error creating output directory: {str(e)}")
+                return
+            
+        if self.enable_logging:
+            logging.info(f"Using output directory: {output_dir}")
+        
         # Add format selection dialog
         format_dialog = QDialog(self)
         format_dialog.setWindowTitle(translations[self.language]['file_format'])
@@ -1395,6 +1494,10 @@ class PDFToExcelGUI(QMainWindow):
 
         self.conversion_thread = ConversionThread(pdf_files, output_dir, merge_files, 
                                                 custom_filename, self.enable_logging)
+        
+        # Add debug logging
+        if self.enable_logging:
+            logging.info(f"Starting conversion with output_dir: {output_dir}")
         
         # Add these lines to pass the name merge settings
         self.conversion_thread.merge_names = self.merge_names
@@ -1566,6 +1669,66 @@ class PDFToExcelGUI(QMainWindow):
                 self.region_branch_ids = settings.get('region_branch_ids', {})
             self.remove_accents = settings.get('remove_accents', False)
             logging.info(f"Updated remove_accents setting in GUI to: {self.remove_accents}")
+
+    def setup_recent_files(self):
+        self.recent_files = []
+        try:
+            with open('recent_files.json', 'r') as f:
+                self.recent_files = json.load(f)
+        except:
+            pass
+
+    def add_to_recent_files(self, files):
+        self.recent_files = ([f for f in files if os.path.exists(f)] + 
+                        [f for f in self.recent_files if os.path.exists(f)])[:10]
+        try:
+            with open('recent_files.json', 'w') as f:
+                json.dump(self.recent_files, f)
+        except:
+            pass
+
+    def show_recent_files(self):
+        menu = QMenu(self)
+        for file in self.recent_files:
+            if os.path.exists(file):
+                action = menu.addAction(os.path.basename(file))
+                action.setData(file)
+        
+        if menu.actions():
+            menu.addSeparator()
+            menu.addAction("Clear Recent Files")
+            
+            pos = self.add_files_btn.mapToGlobal(self.add_files_btn.rect().bottomLeft())
+            action = menu.exec_(pos)
+            
+            if action:
+                if action.text() == "Clear Recent Files":
+                    self.recent_files = []
+                    try:
+                        os.remove('recent_files.json')
+                    except:
+                        pass
+                else:
+                    self.add_new_files([action.data()])
+
+    def show_file_preview(self, item=None):
+        if item is None:
+            item = self.file_list.currentItem()
+            if not item or not self.file_list.itemAt(self.file_list.mapFromGlobal(QCursor.pos())):
+                return
+        
+        file_path = item.text()
+        if not os.path.exists(file_path):
+            return
+        
+        try:
+            # Open PDF with default application
+            if sys.platform == 'win32':
+                os.startfile(file_path)
+            else:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(file_path))
+        except Exception as e:
+            self.status_label.setText(f"Error previewing file: {str(e)}")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
