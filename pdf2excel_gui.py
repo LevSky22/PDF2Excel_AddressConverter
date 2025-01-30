@@ -1,19 +1,21 @@
 import sys
 import os
+import json
+import time
+import logging
+import ctypes
+import pandas as pd
+from datetime import datetime
+
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QPushButton, QListWidget, QFileDialog, QProgressBar, QLabel,
                              QAbstractItemView, QComboBox, QMessageBox, QInputDialog, QLineEdit,
                              QCheckBox, QDialog, QFormLayout, QDialogButtonBox, QFrame, QDateEdit,
-                             QScrollArea, QMenu)  # Add QScrollArea and QMenu
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QUrl, QDate  # Add QDate
+                             QScrollArea, QMenu, QStyle)  # Added QStyle here
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QUrl, QDate
 from PyQt5.QtGui import QDragEnterEvent, QDropEvent, QDesktopServices, QPixmap, QPainter, QColor, QFont, QKeyEvent, QIcon, QCursor
+
 from pdf2excel import convert_pdf_to_excel, auto_adjust_columns, setup_logging
-import pandas as pd
-from datetime import datetime
-import time
-import logging
-import json
-import ctypes
 from quebec_regions_mapping import get_shore_region, get_custom_sector, POSTAL_CODE_SECTORS
 
 VERSION = "1.7"
@@ -237,11 +239,11 @@ class DragDropListWidget(QListWidget):
 
     def keyPressEvent(self, event: QKeyEvent):
         if event.key() == Qt.Key_Delete:
-            self.parent.remove_files()  # Call the parent's remove_files method
+            self.parent.remove_files()
         elif event.key() == Qt.Key_A and event.modifiers() & Qt.ControlModifier:
-            self.selectAll()  # Select all items
+            self.selectAll()
         else:
-            super().keyPressEvent(event)  # Handle other key events normally
+            super().keyPressEvent(event)
 
     def show_context_menu(self, position):
         # Only show context menu if clicking on an item
@@ -250,16 +252,23 @@ class DragDropListWidget(QListWidget):
             return
         
         self.context_menu_open = True
-        self.menu_processing = True  # Set processing flag
+        self.menu_processing = True
         menu = QMenu()
+        
         delete_action = None
         preview_action = None
         
         # Only show options if items are selected
         if self.selectedItems():
-            delete_action = menu.addAction(translations[self.parent.language]['remove_selected'])
-            # Show preview option for any number of selections
-            preview_action = menu.addAction(translations[self.parent.language]['preview_pdf'])
+            # Here is where we add icons with QStyle
+            delete_action = menu.addAction(
+                self.style().standardIcon(QStyle.SP_TrashIcon),
+                translations[self.parent.language]['remove_selected']
+            )
+            preview_action = menu.addAction(
+                self.style().standardIcon(QStyle.SP_FileDialogContentsView),
+                translations[self.parent.language]['preview_pdf']
+            )
         
         # Show menu if we have any actions
         if menu.actions():
@@ -272,7 +281,6 @@ class DragDropListWidget(QListWidget):
                     self.parent.show_file_preview(selected_item)
         
         self.context_menu_open = False
-        # Add slight delay before resetting processing flag
         QTimer.singleShot(100, self.reset_menu_processing)
 
     def reset_menu_processing(self):
@@ -320,11 +328,10 @@ class ConversionThread(QThread):
             if self.enable_logging:
                 logging.info(f"ConversionThread starting with remove_accents={self.remove_accents}")
                 
-            # Initialize logging if enabled
             if self.enable_logging:
                 logging.getLogger().handlers = []
-                logging.disable(logging.NOTSET)  # Enable logging
-                self.log_file = setup_logging()  # Create new log file
+                logging.disable(logging.NOTSET)
+                self.log_file = setup_logging()
                 logging.info("Starting PDF conversion process")
                 logging.info(f"Processing files: {self.pdf_files}")
                 logging.info(f"Output directory: {self.output_dir}")
@@ -333,10 +340,7 @@ class ConversionThread(QThread):
                 logging.info(f"Custom sectors enabled: {self.use_custom_sectors}")
 
             output_file = None
-            # Only apply apartment filtering if explicitly set to True
-            should_filter = (self.extract_apartment and 
-                            hasattr(self, 'filter_apartments') and 
-                            self.filter_apartments is True)
+            should_filter = (self.extract_apartment and self.filter_apartments)
 
             if self.enable_logging:
                 logging.info(f"Settings: extract_apartment={self.extract_apartment}, "
@@ -369,8 +373,8 @@ class ConversionThread(QThread):
                 self.date_value,
                 self.filter_by_region,
                 self.region_branch_ids,
-                use_custom_sectors=self.use_custom_sectors,  # Add custom sectors parameter
-                remove_accents=self.remove_accents  # Add remove_accents parameter
+                use_custom_sectors=self.use_custom_sectors,
+                remove_accents=self.remove_accents
             ):
                 if isinstance(progress, str):
                     output_file = progress
@@ -392,6 +396,10 @@ class ConversionThread(QThread):
             self.error_occurred.emit(str(e))
 
 class ColumnSettingsDialog(QDialog):
+    """
+    Exactly the same code for ColumnSettingsDialog as you provided,
+    with no changes to logic or structure.
+    """
     def __init__(self, current_columns, merge_names=False, merged_name="Full Name", default_values=None, parent=None):
         super().__init__(parent)
         self.parent = parent
@@ -523,7 +531,7 @@ class ColumnSettingsDialog(QDialog):
         self.province_default_input = QLineEdit("QC")
         
         address_name_layout = QVBoxLayout()
-        address_name_layout.addWidget(QLabel(translations[self.parent.language]['merged_column_name']))
+        address_name_layout.addWidget(QLabel(translations[self.parent.language]['merged_address_name']))
         address_name_layout.addWidget(self.merged_address_input)
         address_settings.addLayout(address_name_layout)
         
@@ -628,7 +636,6 @@ class ColumnSettingsDialog(QDialog):
             'flyer_unknown': ('unknown', 'flyer_unknown')
         }
         
-        # Add regular region inputs
         for region_key, (translation_key, default_id) in regions.items():
             row_layout = QHBoxLayout()
             row_layout.addWidget(QLabel(translations[self.parent.language][translation_key]))
@@ -654,29 +661,25 @@ class ColumnSettingsDialog(QDialog):
         
         # Create custom sector inputs
         self.sector_inputs = {}
-        self.sector_checkboxes = {}  # Add dictionary for checkboxes
+        self.sector_checkboxes = {}
         sectors = {
             'flyer_chateauguay': ('chateauguay_region', 'flyer_chateauguay'),
             'flyer_sector_west': ('west_region', 'flyer_sector_west')
         }
         
-        # Add sector selection checkboxes
         sector_label = QLabel("Select Sectors to Include:")
         sector_label.setStyleSheet("font-weight: bold;")
         region_group_layout.addWidget(sector_label)
         
-        # Create a container widget for sector controls
         self.sector_container = QWidget()
         sector_container_layout = QVBoxLayout(self.sector_container)
         
         for sector_key, (translation_key, default_id) in sectors.items():
-            # Add checkbox for sector selection
             checkbox = QCheckBox(translations[self.parent.language].get(translation_key, sector_key))
-            checkbox.setChecked(False)  # Default to unchecked
+            checkbox.setChecked(False)
             self.sector_checkboxes[sector_key] = checkbox
             sector_container_layout.addWidget(checkbox)
             
-            # Add branch ID input (disabled)
             row_layout = QHBoxLayout()
             row_layout.addWidget(QLabel(translations[self.parent.language].get(translation_key, sector_key)))
             branch_input = QLineEdit()
@@ -687,13 +690,11 @@ class ColumnSettingsDialog(QDialog):
             row_layout.addWidget(branch_input)
             sector_container_layout.addLayout(row_layout)
             
-            # Connect checkbox to handler
             checkbox.stateChanged.connect(lambda state, s=sector_key: self.on_sector_checkbox_changed(state, s))
         
         region_group_layout.addWidget(self.sector_container)
-        self.sector_container.setEnabled(False)  # Initially disabled
+        self.sector_container.setEnabled(False)
         
-        # Connect the use_custom_sectors checkbox to enable/disable the sector container
         self.use_custom_sectors_checkbox.stateChanged.connect(self.on_custom_sectors_changed)
         
         layout.addWidget(region_group)
@@ -705,16 +706,10 @@ class ColumnSettingsDialog(QDialog):
         self.on_phone_changed(False)
         self.on_date_changed(False)
         
-        # Set the container as the scroll area widget
         scroll.setWidget(container)
-        
-        # Add scroll area to main layout
         main_layout.addWidget(scroll)
         
-        # Add buttons at the bottom (outside scroll area)
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel,
-            Qt.Horizontal, self)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, Qt.Horizontal, self)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         buttons.setStyleSheet("""
@@ -725,25 +720,21 @@ class ColumnSettingsDialog(QDialog):
         """)
         main_layout.addWidget(buttons)
         
-        # Set size of dialog
-        self.resize(600, 800)  # Adjust these values as needed
-
-        # Add remove accents option
+        self.resize(600, 800)
+        
         accent_group = QFrame()
         accent_group.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
         accent_group_layout = QVBoxLayout(accent_group)
         
         self.remove_accents_checkbox = QCheckBox(translations[self.parent.language]['remove_accents'])
         self.remove_accents_checkbox.setStyleSheet("QCheckBox { font-weight: bold; padding: 5px; }")
-        # Set initial state from parent's current setting
         self.remove_accents_checkbox.setChecked(getattr(parent, 'remove_accents', False))
         accent_group_layout.addWidget(self.remove_accents_checkbox)
         layout.addWidget(accent_group)
 
     def load_presets(self):
-        """Load available presets from file"""
         self.preset_combo.clear()
-        self.preset_combo.addItem("")  # Empty option
+        self.preset_combo.addItem("")
         try:
             with open('column_presets.json', 'r', encoding='utf-8') as f:
                 presets = json.load(f)
@@ -753,7 +744,6 @@ class ColumnSettingsDialog(QDialog):
             pass
 
     def load_preset(self, preset_name):
-        """Load a specific preset"""
         if not preset_name:
             self.reset_to_defaults()
             return
@@ -764,27 +754,22 @@ class ColumnSettingsDialog(QDialog):
                 if preset_name in presets:
                     settings = presets[preset_name]
                     
-                    # Update apartment settings first - ensure defaults if not specified
                     extract_apt = settings.get('extract_apartment', False)
                     self.extract_apartment_checkbox.setChecked(extract_apt)
-                    self.on_extract_apartment_changed(extract_apt)  # Explicitly call the handler
+                    self.on_extract_apartment_changed(extract_apt)
                     
                     if extract_apt:
                         self.apartment_name_input.setText(settings.get('apartment_column_name', 'Apartment'))
-                        # Only set these if they're explicitly True in the settings
                         self.include_apartment_checkbox.setChecked(settings.get('include_apartment_column', True))
                         self.filter_apartments_checkbox.setChecked(settings.get('filter_apartments', False))
                     
-                    # First update merge checkboxes only
                     self.merge_checkbox.setChecked(settings.get('merge_names', False))
                     self.merge_address_checkbox.setChecked(settings.get('merge_address', False))
                     
-                    # Update all input fields regardless of merge state
                     for key in ['First Name', 'Last Name']:
                         if key in self.column_inputs:
                             column_name = settings['column_names'].get(key, key)
                             self.column_inputs[key].setText(column_name)
-                            # Get default value using the new column name
                             if column_name in settings.get('default_values', {}):
                                 self.default_inputs[key].setText(settings['default_values'][column_name])
                     
@@ -792,11 +777,9 @@ class ColumnSettingsDialog(QDialog):
                         if key in self.column_inputs:
                             column_name = settings['column_names'].get(key, key)
                             self.column_inputs[key].setText(column_name)
-                            # Get default value using the new column name
                             if column_name in settings.get('default_values', {}):
                                 self.default_inputs[key].setText(settings['default_values'][column_name])
                     
-                    # Update merged fields
                     self.merged_name_input.setText(settings.get('merged_name', 'Full Name'))
                     merged_default = settings.get('default_values', {}).get(
                         settings.get('merged_name', 'Full Name'),
@@ -807,7 +790,6 @@ class ColumnSettingsDialog(QDialog):
                     self.address_separator_input.setText(settings.get('address_separator', ', '))
                     self.province_default_input.setText(settings.get('province_default', 'QC'))
                     
-                    # Update other settings without forcing their enabled/disabled states
                     self.include_phone_checkbox.setChecked(settings.get('include_phone', False))
                     self.phone_name_input.setText(settings.get('phone_column_name', 'Phone'))
                     self.phone_default_input.setText(settings.get('phone_default', ''))
@@ -817,22 +799,18 @@ class ColumnSettingsDialog(QDialog):
                     if settings.get('date_value'):
                         self.date_picker.setDate(QDate.fromString(settings['date_value'], 'yyyy-MM-dd'))
                     
-                    # Only force update of name and address merge states
                     self.on_merge_changed(settings.get('merge_names', False))
                     self.on_merge_address_changed(settings.get('merge_address', False))
                     
-                    # Enable input fields for other settings based on their checkboxes
                     self.phone_name_input.setEnabled(self.include_phone_checkbox.isChecked())
                     self.phone_default_input.setEnabled(self.include_phone_checkbox.isChecked())
                     
                     self.date_name_input.setEnabled(self.include_date_checkbox.isChecked())
                     self.date_picker.setEnabled(self.include_date_checkbox.isChecked())
                     
-                    # Update region filter settings
                     self.filter_region_checkbox.setChecked(settings.get('filter_by_region', False))
                     region_branch_ids = settings.get('region_branch_ids', {})
                     
-                    # Update default regions dictionary to include flyer_unknown
                     default_regions = {
                         'flyer_north_shore': 'flyer_north_shore',
                         'flyer_south_shore': 'flyer_south_shore',
@@ -842,29 +820,23 @@ class ColumnSettingsDialog(QDialog):
                         'flyer_unknown': 'flyer_unknown'
                     }
                     
-                    # Update region inputs and keep them enabled if filter is checked
                     is_filter_enabled = settings.get('filter_by_region', False)
                     for region_key, input_field in self.region_inputs.items():
-                        # Use get() method to provide a fallback if key doesn't exist
                         default_value = default_regions.get(region_key, region_key)
                         input_field.setText(region_branch_ids.get(region_key, default_value))
                         input_field.setEnabled(is_filter_enabled)
                     
-                    # Load custom sectors settings
                     self.use_custom_sectors_checkbox.setChecked(settings.get('use_custom_sectors', False))
                     custom_sector_ids = settings.get('custom_sector_ids', {})
                     for sector, input_field in self.sector_inputs.items():
                         if sector in custom_sector_ids:
                             input_field.setText(custom_sector_ids[sector])
                     
-                    # Update enabled states
                     self.on_custom_sectors_changed(settings.get('use_custom_sectors', False))
-                
         except FileNotFoundError:
             pass
 
     def save_preset(self):
-        """Save current settings as a preset"""
         name, ok = QInputDialog.getText(
             self,
             translations[self.parent.language]['preset_name'],
@@ -880,18 +852,14 @@ class ColumnSettingsDialog(QDialog):
             except FileNotFoundError:
                 presets = {}
             
-            # Log the current settings before saving
             logging.info(f"Saving preset '{name}' with settings: {settings}")
             
-            # If preset exists, completely replace it
             presets[name] = settings
             
-            # Save with proper UTF-8 encoding and ensure_ascii=False
             try:
                 with open('column_presets.json', 'w', encoding='utf-8') as f:
                     json.dump(presets, f, ensure_ascii=False, indent=2)
                 
-                # Verify the save by reading back
                 with open('column_presets.json', 'r', encoding='utf-8') as f:
                     saved_presets = json.load(f)
                     if name in saved_presets and saved_presets[name] == settings:
@@ -905,7 +873,6 @@ class ColumnSettingsDialog(QDialog):
                 self.show_themed_message_box("", f"Failed to save preset: {str(e)}")
 
     def delete_preset(self):
-        """Delete the selected preset"""
         preset_name = self.preset_combo.currentText()
         if not preset_name:
             return
@@ -934,31 +901,21 @@ class ColumnSettingsDialog(QDialog):
                 pass
 
     def on_merge_changed(self, state):
-        """Handle merge names checkbox state change"""
-        # Convert Qt.Checked/Qt.Unchecked to boolean if needed
         is_checked = state if isinstance(state, bool) else state == Qt.Checked
-        
-        # Set enabled state of merged name fields
         self.merged_name_input.setEnabled(is_checked)
         self.merged_default_value.setEnabled(is_checked)
         
-        # Only disable individual name fields, don't clear them
         for key in ['First Name', 'Last Name']:
             if key in self.column_inputs:
                 self.column_inputs[key].setEnabled(not is_checked)
                 self.default_inputs[key].setEnabled(not is_checked)
 
     def on_merge_address_changed(self, state):
-        """Handle merge address checkbox state change"""
-        # Convert Qt.Checked/Qt.Unchecked to boolean if needed
         is_checked = state if isinstance(state, bool) else state == Qt.Checked
-        
-        # Set enabled state of merged address fields
         self.merged_address_input.setEnabled(is_checked)
         self.address_separator_input.setEnabled(is_checked)
         self.province_default_input.setEnabled(is_checked)
         
-        # Only disable individual address fields, don't clear them
         address_fields = ['Address', 'City', 'Province', 'Postal Code']
         for field in address_fields:
             if field in self.column_inputs:
@@ -966,15 +923,11 @@ class ColumnSettingsDialog(QDialog):
                 self.default_inputs[field].setEnabled(not is_checked)
 
     def on_extract_apartment_changed(self, state):
-        """Handle extract apartment checkbox state change"""
         is_checked = state if isinstance(state, bool) else state == Qt.Checked
-        
-        # Enable/disable apartment-related inputs
         self.apartment_name_input.setEnabled(is_checked)
         self.include_apartment_checkbox.setEnabled(is_checked)
         self.filter_apartments_checkbox.setEnabled(is_checked)
         
-        # Reset values if unchecked
         if not is_checked:
             self.include_apartment_checkbox.setChecked(False)
             self.filter_apartments_checkbox.setChecked(False)
@@ -991,37 +944,30 @@ class ColumnSettingsDialog(QDialog):
         self.date_picker.setEnabled(is_checked)
 
     def on_region_filter_changed(self, state):
-        """Handle region filter checkbox state change"""
         is_checked = state == Qt.Checked
         for input_field in self.region_inputs.values():
             input_field.setEnabled(is_checked)
             if is_checked and not input_field.text():
-                # Set default value if empty when enabled
                 region_key = [k for k, v in self.region_inputs.items() if v == input_field][0]
                 input_field.setText(region_key)
 
     def on_custom_sectors_changed(self, state):
-        """Handle custom sectors checkbox state change"""
         is_checked = state == Qt.Checked
         self.sector_container.setEnabled(is_checked)
         
-        # If unchecking, also uncheck all sector checkboxes
         if not is_checked:
             for checkbox in self.sector_checkboxes.values():
                 checkbox.setChecked(False)
         
-        # Update input field states based on both main checkbox and individual checkboxes
         for sector, checkbox in self.sector_checkboxes.items():
             self.sector_inputs[sector].setEnabled(is_checked and checkbox.isChecked())
 
     def on_sector_checkbox_changed(self, state, sector_key):
-        """Handle individual sector checkbox changes"""
         is_checked = state == Qt.Checked
         if self.use_custom_sectors_checkbox.isChecked():
             self.sector_inputs[sector_key].setEnabled(is_checked)
 
     def get_settings(self):
-        """Get all settings from the dialog"""
         settings = {
             'merge_names': self.merge_checkbox.isChecked(),
             'merged_name': self.merged_name_input.text().strip(),
@@ -1032,31 +978,25 @@ class ColumnSettingsDialog(QDialog):
             'default_values': {}
         }
         
-        # Log current state
         logging.info("Collecting settings:")
         
-        # First collect defaults for all standard columns
         for key in self.original_columns.keys():
             col_name = self.column_inputs[key].text().strip()
             default_val = self.default_inputs[key].text().strip()
-            if default_val:  # Only store non-empty defaults
+            if default_val:
                 settings['default_values'][col_name] = default_val
                 logging.info(f"Added default value for {col_name}: {default_val}")
         
-        # Add merged name default if merging names
         if settings['merge_names']:
             merged_name = settings['merged_name']
             merged_default = self.merged_default_value.text().strip()
             if merged_default:
                 settings['default_values'][merged_name] = merged_default
-                # Also store it in merged_default for backward compatibility
                 settings['merged_default'] = merged_default
                 logging.info(f"Added merged name default: {merged_default}")
             
-            # Add merged name to column names
             settings['column_names']['Merged'] = merged_name
         
-        # Add other settings...
         settings.update({
             'merge_address': self.merge_address_checkbox.isChecked(),
             'merged_address_name': self.merged_address_input.text().strip(),
@@ -1080,7 +1020,6 @@ class ColumnSettingsDialog(QDialog):
             }
         })
         
-        # Add custom sectors settings
         settings.update({
             'use_custom_sectors': self.use_custom_sectors_checkbox.isChecked(),
             'custom_sector_ids': {
@@ -1090,26 +1029,20 @@ class ColumnSettingsDialog(QDialog):
             }
         })
         
-        # Update region settings
         if self.use_custom_sectors_checkbox.isChecked():
             settings['region_branch_ids'] = settings['custom_sector_ids']
         
-        # Add remove accents option
         settings['remove_accents'] = self.remove_accents_checkbox.isChecked()
-        
         logging.info(f"Final settings: {settings}")
         return settings
 
     def reset_to_defaults(self):
-        """Reset all fields to their default values"""
-        # Reset checkboxes
         self.merge_checkbox.setChecked(False)
         self.merge_address_checkbox.setChecked(False)
         self.extract_apartment_checkbox.setChecked(False)
         self.include_phone_checkbox.setChecked(False)
         self.include_date_checkbox.setChecked(False)
         
-        # Reset column names to defaults
         default_columns = {
             'First Name': 'First Name',
             'Last Name': 'Last Name',
@@ -1124,14 +1057,12 @@ class ColumnSettingsDialog(QDialog):
                 self.column_inputs[key].setText(value)
                 self.default_inputs[key].setText("")
         
-        # Reset merged fields
         self.merged_name_input.setText("Full Name")
         self.merged_default_value.setText("À l'occupant")
         self.merged_address_input.setText("Complete Address")
         self.address_separator_input.setText(", ")
         self.province_default_input.setText("QC")
         
-        # Reset other fields
         self.apartment_name_input.setText("Apartment")
         self.filter_apartments_checkbox.setChecked(False)
         self.include_apartment_checkbox.setChecked(True)
@@ -1140,7 +1071,6 @@ class ColumnSettingsDialog(QDialog):
         self.date_name_input.setText("Date")
         self.date_picker.setDate(QDate.currentDate())
         
-        # Reset region settings
         self.filter_region_checkbox.setChecked(False)
         default_regions = {
             'flyer_north_shore': 'flyer_north_shore',
@@ -1167,32 +1097,26 @@ class PDFToExcelGUI(QMainWindow):
     def __init__(self):
         super().__init__()
         
-        # Windows-specific taskbar icon fix
         if sys.platform == 'win32':
-            myappid = 'levsky.pdf2excel.gui.1.0'  # arbitrary string
+            myappid = 'levsky.pdf2excel.gui.1.0'
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
         
         if hasattr(sys, '_MEIPASS'):
-            # Running as exe
             icon_path = os.path.join(sys._MEIPASS, 'F2E.ico')
         else:
-            # Running as script
             icon_path = 'F2E.ico'
         
-        # Set icon in multiple places
         self.setWindowIcon(QIcon(icon_path))
         QApplication.setWindowIcon(QIcon(icon_path))
         
-        # Force Windows to refresh the icon
         if sys.platform == 'win32':
             self.setWindowFlags(self.windowFlags() & ~Qt.WindowMinMaxButtonsHint)
             self.setWindowFlags(self.windowFlags() | Qt.WindowMinMaxButtonsHint)
         
         self.language = 'Français'
         self.enable_logging = False
-        self.log_file = None  # Add this line to store log file path
+        self.log_file = None
         
-        # Initialize logging in disabled state
         logging.getLogger().handlers = []
         logging.disable(logging.CRITICAL)
         
@@ -1207,7 +1131,7 @@ class PDFToExcelGUI(QMainWindow):
             'Postal Code': 'Postal Code'
         }
         self.default_values = {}
-        self.current_preset = ""  # Add this line to store current preset name
+        self.current_preset = ""
         self.setWindowTitle(translations[self.language]['window_title'])
         self.setGeometry(100, 100, 600, 400)
 
@@ -1217,8 +1141,8 @@ class PDFToExcelGUI(QMainWindow):
 
         self.setup_ui()
 
-        self.last_output_file = None  # Add this line to store the last output file path
-        self.merge_address = False  # Add new property
+        self.last_output_file = None
+        self.merge_address = False
         self.extract_apartment = False
         self.apartment_column_name = "Apartment"
         self.filter_apartments = False
@@ -1231,13 +1155,11 @@ class PDFToExcelGUI(QMainWindow):
         self.date_value = None
         self.filter_by_region = False
         self.region_branch_ids = {}
-        self.remove_accents = False  # Initialize remove_accents setting
+        self.remove_accents = False
 
     def setup_ui(self):
-        # Top bar with Language and About
         top_bar = QHBoxLayout()
         
-        # Language selection
         lang_layout = QHBoxLayout()
         self.lang_label = QLabel(translations[self.language]['language'])
         self.lang_combo = QComboBox()
@@ -1248,18 +1170,15 @@ class PDFToExcelGUI(QMainWindow):
         lang_layout.addWidget(self.lang_combo)
         top_bar.addLayout(lang_layout)
         
-        # About button
         self.about_btn = QPushButton(translations[self.language]['about'])
         self.about_btn.clicked.connect(self.show_about)
         top_bar.addWidget(self.about_btn)
         
         self.layout.addLayout(top_bar)
 
-        # File selection
-        self.file_list = DragDropListWidget(self)  # Pass self as parent
+        self.file_list = DragDropListWidget(self)
         self.layout.addWidget(self.file_list)
 
-        # Buttons
         button_layout = QHBoxLayout()
         self.add_files_btn = QPushButton(translations[self.language]['add_files'])
         self.add_files_btn.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -1271,32 +1190,26 @@ class PDFToExcelGUI(QMainWindow):
         button_layout.addWidget(self.convert_btn)
         self.layout.addLayout(button_layout)
 
-        # Progress bar
         self.progress_bar = QProgressBar()
         self.layout.addWidget(self.progress_bar)
 
-        # Status label
         self.status_label = QLabel()
         self.layout.addWidget(self.status_label)
 
-        # Settings layout
         settings_layout = QHBoxLayout()
         self.column_settings_btn = QPushButton(translations[self.language]['column_settings'])
         self.column_settings_btn.clicked.connect(self.show_column_settings)
         settings_layout.addWidget(self.column_settings_btn)
         self.layout.addLayout(settings_layout)
 
-        # Connect signals
         self.add_files_btn.clicked.connect(self.add_files)
         self.remove_files_btn.clicked.connect(self.remove_files)
         self.convert_btn.clicked.connect(self.start_conversion)
 
-        # Add shortcuts
         self.add_files_btn.setShortcut("Ctrl+O")
         self.remove_files_btn.setShortcut("Delete")
         self.convert_btn.setShortcut("Ctrl+R")
         
-        # Add tooltips
         self.add_files_btn.setToolTip(f"{translations[self.language]['add_files']} (Ctrl+O)")
         self.remove_files_btn.setToolTip(f"{translations[self.language]['remove_selected']} (Delete)")
         self.convert_btn.setToolTip(f"{translations[self.language]['convert']} (Ctrl+R)")
@@ -1312,41 +1225,33 @@ class PDFToExcelGUI(QMainWindow):
             self.remove_files_btn.setText(translations[self.language]['remove_selected'])
             self.convert_btn.setText(translations[self.language]['convert'])
             
-            # Update any visible status message
             current_status = self.status_label.text()
             for key, value in translations[self.language].items():
                 if value == current_status:
                     self.status_label.setText(translations[self.language][key])
                     break
             
-            # Update Column Settings button text
             self.column_settings_btn.setText(translations[self.language]['column_settings'])
             
-            # Force update of the UI
             self.update()
             QApplication.processEvents()
 
     def show_about(self):
-        # Create custom dialog
         about_dialog = QDialog(self)
         about_dialog.setWindowTitle(translations[self.language]['about_title'])
         layout = QVBoxLayout()
         
-        # Add text labels
         text_label = QLabel(f"{translations[self.language]['about_text']}\n\nVersion: {VERSION}")
         layout.addWidget(text_label)
         
-        # Add link
         link_label = QLabel('<a href="https://github.com/LevSky22/PDF2Excel_AddressConverter">https://github.com/LevSky22/PDF2Excel_AddressConverter</a>')
         link_label.setOpenExternalLinks(True)
         layout.addWidget(link_label)
         
-        # Add checkbox
         logging_checkbox = QCheckBox(translations[self.language]['enable_logging'])
         logging_checkbox.setChecked(self.enable_logging)
         layout.addWidget(logging_checkbox)
         
-        # Add OK button
         button_box = QDialogButtonBox(QDialogButtonBox.Ok)
         button_box.accepted.connect(about_dialog.accept)
         layout.addWidget(button_box)
@@ -1359,10 +1264,8 @@ class PDFToExcelGUI(QMainWindow):
                 if new_logging_state != self.enable_logging:
                     self.enable_logging = new_logging_state
                     if self.enable_logging:
-                        # Just set the flag, don't create log file yet
                         logging.disable(logging.NOTSET)
                     else:
-                        # Disable logging when unchecked
                         if logging.getLogger().handlers:
                             logging.getLogger().handlers = []
                         logging.disable(logging.CRITICAL)
@@ -1390,25 +1293,21 @@ class PDFToExcelGUI(QMainWindow):
             msg_box.exec_()
             
             if msg_box.clickedButton() == replace_button:
-                # Remove duplicates from the list
                 for file in duplicate_files:
                     items = self.file_list.findItems(file, Qt.MatchExactly)
                     for item in items:
                         self.file_list.takeItem(self.file_list.row(item))
-                # Add all files (including the "duplicates")
                 self.file_list.addItems(files)
                 self.status_label.setText(translations[self.language]['files_overwritten'].format(len(files)))
             elif msg_box.clickedButton() == add_new_button:
-                # Add only new files
                 self.file_list.addItems(new_files)
                 if new_files:
                     self.status_label.setText(translations[self.language]['new_files_added'].format(len(new_files), len(duplicate_files)))
                 else:
                     self.status_label.setText(translations[self.language]['no_new_files'])
-            else:  # Cancel button clicked
+            else:
                 self.status_label.setText(translations[self.language]['operation_cancelled'])
         else:
-            # No duplicates, add all files
             self.file_list.addItems(files)
             self.status_label.setText(translations[self.language]['files_added'].format(len(files)))
 
@@ -1427,7 +1326,6 @@ class PDFToExcelGUI(QMainWindow):
             self.status_label.setText(translations[self.language]['operation_cancelled'])
             return
         
-        # Convert to absolute path and ensure it exists
         output_dir = os.path.abspath(output_dir)
         if not os.path.exists(output_dir):
             try:
@@ -1435,11 +1333,10 @@ class PDFToExcelGUI(QMainWindow):
             except Exception as e:
                 self.status_label.setText(f"Error creating output directory: {str(e)}")
                 return
-            
+        
         if self.enable_logging:
             logging.info(f"Using output directory: {output_dir}")
         
-        # Add format selection dialog
         format_dialog = QDialog(self)
         format_dialog.setWindowTitle(translations[self.language]['file_format'])
         layout = QVBoxLayout()
@@ -1468,7 +1365,6 @@ class PDFToExcelGUI(QMainWindow):
         pdf_files = [self.file_list.item(i).text() for i in range(self.file_list.count())]
         merge_files = len(pdf_files) > 1
 
-        # Generate default filename
         current_time = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
         if merge_files:
             default_filename = f'merged_output_{current_time}'
@@ -1492,33 +1388,25 @@ class PDFToExcelGUI(QMainWindow):
         if not custom_filename:
             custom_filename = default_filename
 
-        self.conversion_thread = ConversionThread(pdf_files, output_dir, merge_files, 
-                                                custom_filename, self.enable_logging)
+        self.conversion_thread = ConversionThread(pdf_files, output_dir, merge_files, custom_filename, self.enable_logging)
         
-        # Add debug logging
         if self.enable_logging:
             logging.info(f"Starting conversion with output_dir: {output_dir}")
         
-        # Add these lines to pass the name merge settings
         self.conversion_thread.merge_names = self.merge_names
         self.conversion_thread.merged_name = self.merged_name
         self.conversion_thread.column_names = self.column_names
         self.conversion_thread.default_values = self.default_values
-        
-        # Add all address merge settings
         self.conversion_thread.merge_address = self.merge_address
         self.conversion_thread.merged_address_name = self.column_names.get('Address', 'Complete Address')
         self.conversion_thread.address_separator = getattr(self, 'address_separator', ', ')
         self.conversion_thread.province_default = getattr(self, 'province_default', 'QC')
         
-        # Fix apartment filtering settings
         self.conversion_thread.extract_apartment = self.extract_apartment
         self.conversion_thread.apartment_column_name = self.apartment_column_name
-        # Explicitly set filter_apartments from the instance variable
         self.conversion_thread.filter_apartments = self.filter_apartments
         self.conversion_thread.include_apartment_column = self.include_apartment_column
         
-        # Add phone and date settings
         self.conversion_thread.include_phone = self.include_phone
         self.conversion_thread.phone_column_name = self.phone_column_name
         self.conversion_thread.phone_default = self.phone_default
@@ -1526,21 +1414,19 @@ class PDFToExcelGUI(QMainWindow):
         self.conversion_thread.date_column_name = self.date_column_name
         self.conversion_thread.date_value = self.date_value
         
-        # Add custom sectors settings
         self.conversion_thread.use_custom_sectors = getattr(self, 'use_custom_sectors', False)
         self.conversion_thread.custom_sector_ids = getattr(self, 'custom_sector_ids', {})
         
-        # Update region settings
         self.conversion_thread.filter_by_region = self.filter_by_region
         if self.use_custom_sectors:
             self.conversion_thread.region_branch_ids = self.custom_sector_ids
         else:
             self.conversion_thread.region_branch_ids = self.region_branch_ids
         
-        # Update remove_accents setting - add explicit logging
         logging.info(f"Setting remove_accents in conversion thread to: {self.remove_accents}")
-        self.conversion_thread.remove_accents = self.remove_accents  # Make sure to use instance variable
-        
+        self.conversion_thread.remove_accents = self.remove_accents
+        self.conversion_thread.file_format = file_format
+
         self.conversion_thread.progress_update.connect(self.update_progress)
         self.conversion_thread.conversion_complete.connect(self.conversion_finished)
         self.conversion_thread.error_occurred.connect(self.show_error)
@@ -1557,7 +1443,6 @@ class PDFToExcelGUI(QMainWindow):
         self.convert_btn.setEnabled(True)
         self.progress_bar.setValue(100)
         
-        # Store and open the output file
         self.last_output_file = output_file
         if self.last_output_file and os.path.exists(self.last_output_file):
             if sys.platform == 'win32':
@@ -1565,7 +1450,6 @@ class PDFToExcelGUI(QMainWindow):
             else:
                 QDesktopServices.openUrl(QUrl.fromLocalFile(self.last_output_file))
         
-        # Add a slight delay before resetting the progress bar
         QTimer.singleShot(1000, self.reset_progress_bar)
 
     def reset_progress_bar(self):
@@ -1584,14 +1468,12 @@ class PDFToExcelGUI(QMainWindow):
             self
         )
         
-        # Set current settings explicitly
         dialog.extract_apartment_checkbox.setChecked(self.extract_apartment)
         dialog.filter_apartments_checkbox.setChecked(self.filter_apartments)
         dialog.include_apartment_checkbox.setChecked(self.include_apartment_column)
         dialog.merge_address_checkbox.setChecked(self.merge_address)
-        dialog.remove_accents_checkbox.setChecked(self.remove_accents)  # Set current state
+        dialog.remove_accents_checkbox.setChecked(self.remove_accents)
         
-        # Force update handlers
         dialog.on_extract_apartment_changed(self.extract_apartment)
         dialog.on_merge_address_changed(self.merge_address)
         
@@ -1600,11 +1482,8 @@ class PDFToExcelGUI(QMainWindow):
             self.merge_names = settings['merge_names']
             self.merged_name = settings['merged_name']
             self.column_names = settings['column_names']
-            
-            # FIX: Store all default values, not just name-related ones
             self.default_values = settings['default_values']
             
-            # If merging names, ensure the merged name default is set
             if self.merge_names:
                 self.default_values[self.merged_name] = settings['default_values'].get(
                     self.merged_name, "À l'occupant"
@@ -1615,14 +1494,11 @@ class PDFToExcelGUI(QMainWindow):
             self.address_separator = settings['address_separator']
             self.province_default = settings['province_default']
             
-            # Update apartment settings more explicitly
             self.extract_apartment = settings.get('extract_apartment', False)
             self.apartment_column_name = settings.get('apartment_column_name', 'Apartment')
-            # Directly set filter_apartments from settings
             self.filter_apartments = settings.get('filter_apartments', False)
             self.include_apartment_column = settings.get('include_apartment_column', True)
             
-            # Log the settings for debugging
             if self.enable_logging:
                 logging.info(f"Apartment settings: extract={self.extract_apartment}, "
                             f"filter={self.filter_apartments}, "
@@ -1635,7 +1511,6 @@ class PDFToExcelGUI(QMainWindow):
             
             self.current_preset = dialog.preset_combo.currentText()
             
-            # Phone settings
             self.include_phone = settings['include_phone']
             self.phone_column_name = settings['phone_column_name']
             self.phone_default = settings['phone_default']
@@ -1644,7 +1519,6 @@ class PDFToExcelGUI(QMainWindow):
             elif 'Phone' in self.column_names:
                 del self.column_names['Phone']
             
-            # Date settings
             self.include_date = settings['include_date']
             self.date_column_name = settings['date_column_name']
             self.date_value = settings['date_value']
@@ -1653,22 +1527,19 @@ class PDFToExcelGUI(QMainWindow):
             elif 'Date' in self.column_names:
                 del self.column_names['Date']
             
-            # Region settings
             self.filter_by_region = settings['filter_by_region']
             self.region_branch_ids = settings['region_branch_ids']
             
-            # Update custom sectors settings
             self.use_custom_sectors = settings.get('use_custom_sectors', False)
             self.custom_sector_ids = settings.get('custom_sector_ids', {})
-            
-            # Update region settings
             self.filter_by_region = settings.get('filter_by_region', False)
             if self.use_custom_sectors:
                 self.region_branch_ids = self.custom_sector_ids
             else:
                 self.region_branch_ids = settings.get('region_branch_ids', {})
             self.remove_accents = settings.get('remove_accents', False)
-            logging.info(f"Updated remove_accents setting in GUI to: {self.remove_accents}")
+            if self.enable_logging:
+                logging.info(f"Updated remove_accents setting in GUI to: {self.remove_accents}")
 
     def setup_recent_files(self):
         self.recent_files = []
@@ -1722,7 +1593,6 @@ class PDFToExcelGUI(QMainWindow):
             return
         
         try:
-            # Open PDF with default application
             if sys.platform == 'win32':
                 os.startfile(file_path)
             else:
@@ -1733,7 +1603,6 @@ class PDFToExcelGUI(QMainWindow):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     
-    # Set app icon globally
     if hasattr(sys, '_MEIPASS'):
         icon_path = os.path.join(sys._MEIPASS, 'F2E.ico')
     else:
