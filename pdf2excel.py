@@ -8,7 +8,6 @@ import logging
 from datetime import datetime
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
-import tabula
 import time
 from unidecode import unidecode
 
