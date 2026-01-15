@@ -248,15 +248,19 @@ def process_pdfs(
         logging.info(f"Extracted {len(df)} rows from {pdf_path}")
 
         # Filter based on ST (Status) column and CPP detection
-        if 'st' in df.columns:
+        if 'st' in df.columns and not df.empty:
             # Clean ST column: strip whitespace and convert to uppercase for comparison
             df['st'] = df['st'].astype(str).str.strip().str.upper()
             
-            # Check if all ST values are empty (old-format PDF with 4 columns)
+            # Check if all ST values are empty or 'nan' (old-format PDF with 4 columns)
+            # This handles backward compatibility where empty strings were inserted for ST
+            # Replace 'nan' strings (from pandas NaN conversion) with empty strings for consistent checking
+            df['st'] = df['st'].replace('NAN', '')
             all_st_empty = (df['st'] == '').all()
             
             if all_st_empty:
                 # Old-format PDF: skip ST filtering since status is unknown
+                # This prevents all rows from being filtered out when ST is empty
                 logging.warning(f"Old-format PDF detected (no ST column). Skipping ST/CPP filtering for {len(df)} rows.")
             else:
                 # Filter: Include all 'SO' (Sold) rows, and 'AC' (Active) rows only if they have CPP
@@ -270,7 +274,7 @@ def process_pdfs(
                 df = df.reset_index(drop=True)
                 
                 logging.info(f"After ST/CPP filtering: {len(df)} rows remaining")
-        else:
+        elif 'st' not in df.columns:
             logging.warning("ST column not found in extracted data. Skipping status filtering.")
 
         # Basic cleaning of municipality / address columns
