@@ -29,8 +29,17 @@ def setup_logging():
     )
     return log_file
 
+def has_cpp_in_centris_no(centris_no_text):
+    """Check if Centris No. cell contains CPP keyword (case-insensitive)."""
+    if not centris_no_text:
+        return False
+    # Convert to string and check for CPP (case-insensitive)
+    # CPP may appear with newlines, so we check the entire cell content
+    text = str(centris_no_text).upper()
+    return 'CPP' in text
+
 def extract_with_pdfplumber(pdf_path):
-    """Extracts rows from a PDF with columns [centris_no, municipality_borough, address, postal_code]."""
+    """Extracts rows from a PDF with columns [st, centris_no, municipality_borough, address, postal_code]."""
     with pdfplumber.open(pdf_path) as pdf:
         all_data = []
         for page in pdf.pages:
@@ -40,12 +49,18 @@ def extract_with_pdfplumber(pdf_path):
                 # If so, we skip it with table[1:], but adapt as needed
                 for row in table[1:]:  # Skip the header row
                     # Join any split cells and clean up whitespace
-                    cleaned_row = [' '.join(str(cell).split()) for cell in row if cell]
-                    if len(cleaned_row) == 4:
-                        all_data.append(cleaned_row)
+                    cleaned_row = [' '.join(str(cell).split()) if cell else '' for cell in row]
+                    # Filter out None/empty cells but keep the structure
+                    if len(cleaned_row) >= 5:
+                        # Take first 5 columns: ST, Centris No., Municipality/Borough, Address, Postal Code
+                        all_data.append(cleaned_row[:5])
+                    elif len(cleaned_row) == 4:
+                        # Handle case where ST column might be missing (backward compatibility)
+                        # Insert empty ST at the beginning
+                        all_data.append([''] + cleaned_row[:4])
                     else:
                         logging.warning(f"Skipping malformed row: {cleaned_row}")
-        return pd.DataFrame(all_data, columns=['centris_no', 'municipality_borough', 'address', 'postal_code'])
+        return pd.DataFrame(all_data, columns=['st', 'centris_no', 'municipality_borough', 'address', 'postal_code'])
 
 def extract_apartment(address):
     """Extract apartment substring (e.g. 'Apt. 101') from an address. Returns (address_without_apt, apartment_text)."""
@@ -232,6 +247,32 @@ def process_pdfs(
         df = extract_with_pdfplumber(pdf_path)
         logging.info(f"Extracted {len(df)} rows from {pdf_path}")
 
+        # Filter based on ST (Status) column and CPP detection
+        if 'st' in df.columns:
+            # Clean ST column: strip whitespace and convert to uppercase for comparison
+            df['st'] = df['st'].astype(str).str.strip().str.upper()
+            
+            # Check if all ST values are empty (old-format PDF with 4 columns)
+            all_st_empty = (df['st'] == '').all()
+            
+            if all_st_empty:
+                # Old-format PDF: skip ST filtering since status is unknown
+                logging.warning(f"Old-format PDF detected (no ST column). Skipping ST/CPP filtering for {len(df)} rows.")
+            else:
+                # Filter: Include all 'SO' (Sold) rows, and 'AC' (Active) rows only if they have CPP
+                # Create mask for rows to keep
+                so_mask = df['st'] == 'SO'
+                ac_with_cpp_mask = (df['st'] == 'AC') & df['centris_no'].apply(has_cpp_in_centris_no)
+                
+                # Apply filter
+                df = df[so_mask | ac_with_cpp_mask].copy()
+                # Reset index to avoid issues with iloc when addresses are unmerged
+                df = df.reset_index(drop=True)
+                
+                logging.info(f"After ST/CPP filtering: {len(df)} rows remaining")
+        else:
+            logging.warning("ST column not found in extracted data. Skipping status filtering.")
+
         # Basic cleaning of municipality / address columns
         df['municipality_borough'] = df['municipality_borough'].apply(lambda x: x.split('(')[0].strip() if x else x)
         df['address'] = df['address'].apply(lambda x: x.strip() if x else x)
@@ -372,7 +413,7 @@ def process_pdfs(
                     cleaned_addresses.append(plain_addr)
                     valid_indices.append(idx)
             
-            df_filtered = df.iloc[valid_indices].copy()
+            df_filtered = df.loc[valid_indices].copy()
             output_data = {}
             
             # Build columns

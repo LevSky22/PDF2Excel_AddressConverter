@@ -1155,6 +1155,8 @@ class PDFToExcelGUI(QMainWindow):
         self.date_value = None
         self.filter_by_region = False
         self.region_branch_ids = {}
+        self.use_custom_sectors = False
+        self.custom_sector_ids = {}
         self.remove_accents = False
 
     def setup_ui(self):
