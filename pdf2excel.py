@@ -252,17 +252,24 @@ def process_pdfs(
             # Clean ST column: strip whitespace and convert to uppercase for comparison
             df['st'] = df['st'].astype(str).str.strip().str.upper()
             
-            # Filter: Include all 'SO' (Sold) rows, and 'AC' (Active) rows only if they have CPP
-            # Create mask for rows to keep
-            so_mask = df['st'] == 'SO'
-            ac_with_cpp_mask = (df['st'] == 'AC') & df['centris_no'].apply(has_cpp_in_centris_no)
+            # Check if all ST values are empty (old-format PDF with 4 columns)
+            all_st_empty = (df['st'] == '').all()
             
-            # Apply filter
-            df = df[so_mask | ac_with_cpp_mask].copy()
-            # Reset index to avoid issues with iloc when addresses are unmerged
-            df = df.reset_index(drop=True)
-            
-            logging.info(f"After ST/CPP filtering: {len(df)} rows remaining")
+            if all_st_empty:
+                # Old-format PDF: skip ST filtering since status is unknown
+                logging.warning(f"Old-format PDF detected (no ST column). Skipping ST/CPP filtering for {len(df)} rows.")
+            else:
+                # Filter: Include all 'SO' (Sold) rows, and 'AC' (Active) rows only if they have CPP
+                # Create mask for rows to keep
+                so_mask = df['st'] == 'SO'
+                ac_with_cpp_mask = (df['st'] == 'AC') & df['centris_no'].apply(has_cpp_in_centris_no)
+                
+                # Apply filter
+                df = df[so_mask | ac_with_cpp_mask].copy()
+                # Reset index to avoid issues with iloc when addresses are unmerged
+                df = df.reset_index(drop=True)
+                
+                logging.info(f"After ST/CPP filtering: {len(df)} rows remaining")
         else:
             logging.warning("ST column not found in extracted data. Skipping status filtering.")
 
